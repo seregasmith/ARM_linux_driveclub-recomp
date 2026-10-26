@@ -68,25 +68,93 @@ chmod +x DriveClub-recomp-aarch64.AppImage
 
 Without `--update/--base` it opens folder pickers (zenity or kdialog) when there is a desktop. The folders are
 saved; later starts need no options, so the AppImage can be added to Steam or a frontend as it is.
-Settings, the prepared game image, saves, the shader cache and the logs are in
-`~/.local/share/driveclub-recomp/` (`DC_DATA_DIR`). `driveclub.conf` there holds the settings; `run.sh --help`
-lists them. The defaults suit a handheld:
 
-| key | default | |
+There is no launcher window on Linux: the AppImage goes straight into the game. `run.sh` inside it does the Windows
+launcher's job (prepares the game from the dumps, applies the settings, starts the runtime) and takes its
+settings from a text file instead of a window.
+
+### Command-line options
+
+| option | |
+|---|---|
+| `--update DIR --base DIR` | set the game folders (saved), then start |
+| `--setup` | choose the game folders again (folder pickers) |
+| `--config` | print the settings file's path and contents |
+| `--list-patches` | the community patches (names for `patches_on`/`patches_off`) and their defaults |
+| `--cpu-selftest` | check the guest CPU (FEXCore) without the game, then its speed |
+| `--vulkan-info` | the Vulkan driver the game will use |
+| `--help` | all options and settings |
+
+Anything else is passed on to the runtime.
+
+### Files
+
+Everything lives in `~/.local/share/driveclub-recomp/` (`$XDG_DATA_HOME/driveclub-recomp`, or `DC_DATA_DIR`):
+
+| path | |
+|---|---|
+| `driveclub.conf` | the settings (below) |
+| `logs/driveclub_<date>_<time>.log` | one log per start |
+| `prep/` | the game image prepared from the dumps (converted again when the folders change) |
+| `user/savedata/` | save games |
+| `user/shader/` | the shader cache |
+| `user/patches_enabled.txt` | the community patches in use (written at each start from the settings) |
+| `mods/` | loose-file mods: files here replace the game's own files of the same path |
+
+### Settings (`driveclub.conf`)
+
+One `key=value` per line. `run.sh` reads it at every start, so a change applies from the next start, and writes it
+back (keys only: comments you add are not kept). Edit it with any text editor, or from a terminal, e.g. the
+language:
+
+```bash
+f=~/.local/share/driveclub-recomp/driveclub.conf
+grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'language=8' >> "$f"
+```
+
+| key | default | values |
 |---|---|---|
-| `preset` | `handheld` | 720p render and output, static mirrors (`low`, `medium`, `high`, `custom`) |
-| `fps` | `60` | 60 FPS with the deltatime patch; `30`, `60fixed`, `unlocked` (with `fps_cap`) |
-| `aa` | `off` | `fsr3` for FSR 3.1 anti-aliasing / upscaling (`upscale=quality`, ...) |
-| `mangohud` | `0` | `1`: MangoHud overlay (bundled) |
-| `two_thread` | `1` | the two-thread draw path |
-| `env.BB_...` | | any runtime variable (BUILDING.md has the diagnostics ones) |
+| `update` | | the version 1.28 update dump (with `eboot.bin`); may be the same folder as `base` |
+| `base` | | the base game dump (with `game000.dat`) |
+| `preset` | `handheld` | `handheld` (720p render and output, static mirrors), `low` (720p render), `medium` (1440p output), `high` (4K output, 1440p render), `custom` (only the patches you choose) |
+| `fps` | `60` | `30`, `60` (60 FPS with the deltatime patch), `60fixed` (60 FPS with a fixed tick rate), `unlocked` (with `fps_cap`) |
+| `fps_cap` | `60` | the frame cap with `fps=unlocked` |
+| `fullscreen` | `1` | `0`: a window |
+| `aa` | `off` | `off` (the game's own), `fsr3` (FSR 3.1 anti-aliasing / upscaling) |
+| `upscale` | `native` | with `aa=fsr3`: `native`, `quality`, `balanced`, `performance`, `ultra_performance` |
+| `sharpness` | `80` | `0`..`100` (FSR's RCAS) |
+| `mirror` | the preset's | `live`, `static` |
+| `aniso` | the runtime's | `0`, `2`, `4`, `8`, `16` (anisotropic filtering) |
+| `show_fps` | `0` | `1`: the FPS counter |
+| `mangohud` | `0` | `1`: the MangoHud overlay (bundled) |
+| `two_thread` | `1` | `0`: switch off the two-thread draw path |
+| `name` | `Player` | the player name |
+| `language` | `1` | the console language (below) |
+| `patches_on` | | extra community patches by name, separated by `;` (`--list-patches`) |
+| `patches_off` | | patches switched off, the same way |
+| `env.NAME` | | any variable for the runtime (`env.BB_...`, BUILDING.md lists the diagnostics ones) or FEXCore (`env.FEX_...`, see Tuning) |
 
-Logs: `~/.local/share/driveclub-recomp/logs/driveclub_<date>.log`. Vulkan driver check:
-`./DriveClub-recomp-aarch64.AppImage --vulkan-info`. Guest CPU check, without the game (FEXCore runs a few x86-64
-functions: calls both ways, SSE/AVX, atomics, four threads, RDTSC; then its speed):
-`./DriveClub-recomp-aarch64.AppImage --cpu-selftest`. On an Apple M-series Linux VM it reports about 2.8 billion
-iterations/s for its integer loop (native ARM64: 4.4), 34 ns per call from game code into the runtime and 92 ns per
-call back.
+Variables already set in the environment (`BB_*`, `DC_*`) win over the file.
+
+**Language.** The game has no language menu of its own: it uses the console's system language, which is
+`language=` here (the Windows launcher's Language choice):
+
+| id | language | id | language | id | language |
+|---|---|---|---|---|---|
+| 0 | Japanese | 7 | Portuguese | 14 | Danish |
+| 1 | English (US) | 8 | Russian | 15 | Norwegian |
+| 2 | French | 9 | Korean | 16 | Polish |
+| 3 | Spanish | 10 | Chinese (Traditional) | 17 | Portuguese (Brazil) |
+| 4 | German | 11 | Chinese (Simplified) | 18 | English (UK) |
+| 5 | Italian | 12 | Finnish | 19 | Turkish |
+| 6 | Dutch | 13 | Swedish | 20 | Spanish (Mexico) |
+
+### Checks
+
+`--vulkan-info` shows the Vulkan driver the game gets (the bundled Turnip on Adreno). `--cpu-selftest` runs a few
+x86-64 functions through FEXCore without the game (calls both ways, SSE/AVX, atomics, four threads, RDTSC), then
+measures its speed. On an Apple M-series Linux VM it reports about 2.8 billion iterations/s for its integer loop
+(native ARM64: 4.4), 34 ns per call from game code into the runtime and 92 ns per call back.
 
 ## What changed for ARM64 (and Linux)
 
@@ -130,6 +198,6 @@ statistics to the log every 5 seconds.
 ## Status
 
 The first full build with `build_docker.sh` (Apple Silicon, FEX main of 2026-10-25) produced the AppImage; its
-package check passed, and in an ARM64 Linux VM the AppImage starts (`--help`) and `dc-cpu-selftest` passes with
-FEXCore. The first run of the game on an Odin 3 is still to be done. Report problems with the log file and, for a
+package check passed, `dc-cpu-selftest` passes with FEXCore in an ARM64 Linux VM, and on an Odin 3 (Armada OS) the
+AppImage starts the game. Frame rate and rendering on the Odin 3 are still to be measured. Report problems with the log file and, for a
 crash, the lines starting with `Guest fault`, `Host fault` or `STOP:`.
