@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include "bbport_guest_call.h"
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -2185,7 +2186,7 @@ void DrainPushEvents() {
                         Lib_NpWebApi, "invoking extd cb ctx={:#x} cbId={} dataType='{}'",
                         title_user_ctx_id, cbId,
                         ev.dataType); // debug confirm the listener callback fires. to be removed
-                    reinterpret_cast<ExtdCbA>(raw)(
+                    GuestCall(reinterpret_cast<ExtdCbA>(raw), 
                         title_user_ctx_id, cbId, svc, flt->npServiceLabel, nullptr, to_p, nullptr,
                         from_p, &dt, ext_data, ev.data.size(), ext_arr, exarr.size(), cb->pUserArg);
                 }
@@ -2214,7 +2215,7 @@ void DrainPushEvents() {
                     if (ev.hasFrom) {
                         from_peer.onlineId = ev.fromOnlineId;
                     }
-                    reinterpret_cast<ServiceCb>(reinterpret_cast<void (*)()>(cb->cbFunc))(
+                    GuestCall(reinterpret_cast<ServiceCb>(reinterpret_cast<void (*)()>(cb->cbFunc)), 
                         title_user_ctx_id, cbId, svc, flt->npServiceLabel, &to_peer, &from_peer,
                         &dt, svc_data, ev.data.size(), cb->pUserArg);
                 }
@@ -2255,7 +2256,7 @@ void DrainPushEvents() {
                             from_peer.onlineId = ev.fromOnlineId;
                         }
                         const char* p_data = ev.data.empty() ? nullptr : ev.data.data();
-                        reinterpret_cast<BasicCb>(reinterpret_cast<void (*)()>(cb->cbFunc))(
+                        GuestCall(reinterpret_cast<BasicCb>(reinterpret_cast<void (*)()>(cb->cbFunc)), 
                             title_user_ctx_id, cbId, &to_peer, &from_peer, &dt, p_data,
                             ev.data.size(), cb->pUserArg);
                     }

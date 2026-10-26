@@ -169,6 +169,12 @@ A second line, `Benchmark: ran render=... output=... fps_limit=... aa=...`, list
 ## Building from source
 See [BUILDING.md](BUILDING.md).
 
+## Linux and ARM64 handhelds (experimental)
+The runtime also builds as a native Linux program, and on ARM64 Linux (AYN Odin 3 on Armada OS and other
+Snapdragon handhelds) the game's x86-64 code runs in FEXCore's JIT while the runtime and the renderer run natively,
+instead of emulating the whole Windows build under Proton. `./build_docker.sh appimage` builds an AppImage on an
+Apple Silicon Mac. See [docs/ARM64_LINUX.md](docs/ARM64_LINUX.md).
+
 ## Reporting problems
 Open an [issue](../../issues/new/choose) and fill in the form. **Attach the log files**: without them an issue usually cannot be solved. In the folder next to `DriveClub.exe`, open `logs` and drag these into the issue:
 - the newest `driveclub_<date>_<time>.log` (one per start: take the one from the run that went wrong). It starts with your Windows, processor, graphics card, driver and launcher choices, and has a status line every 30 seconds, so nothing else is needed from you.

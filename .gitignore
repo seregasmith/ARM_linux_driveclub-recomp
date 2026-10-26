@@ -3,3 +3,7 @@ out/
 data/
 logs/
 launcher.ini
+dist/
+pgo/
+packaging/runtime-paths.nix
+.idea/

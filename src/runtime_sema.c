@@ -65,11 +65,7 @@ extern __thread int runtime_thread_background;
  * between polls instead of keeping a core busy. */
 static void throttle_background(void) {
     if (!runtime_thread_background) return;
-#ifdef _WIN32
     compat_sleep_ns(2000000);
-#else
-    usleep(2000);
-#endif
 }
 static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) {
     pthread_mutex_lock(&lock);

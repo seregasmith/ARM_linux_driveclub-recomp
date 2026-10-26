@@ -1,7 +1,7 @@
 # Building
 
 The game runtime and the launcher are built on Windows with the MSYS2 CLANG64 toolchain. Everything else
-the code needs is in this repository (`gpu/third_party/`, `third_party/`).
+the code needs is in this repository (`gpu/third_party/`, `third_party/`). Linux and ARM64 Linux: see below.
 
 ## Toolchain
 
@@ -16,6 +16,23 @@ Install MSYS2 and, from the CLANG64 shell, the build packages once:
     bash build.sh
 
 This produces `out/DriveClubGame.exe`.
+
+## Linux and ARM64 (AppImage)
+
+On Linux `bash build.sh` builds `out/DriveClubGame` (the runtime), `out/gpu/libbbgpu.so`, `out/dc-prepare`
+(the launcher's preparation as a command) and `out/dc-cpu-selftest` (the guest CPU checked without the game:
+`bash run.sh --cpu-selftest`); `bash run.sh` prepares the game and starts it. The dependencies are in
+`shell.nix` (`nix-shell shell.nix`, or your distribution's packages of the same names).
+
+On ARM64 Linux the game's x86-64 code runs in FEXCore's JIT (`cpu/`, `third_party/FEX`, from the bbport ARM64
+port) and the runtime and the GPU library are native. `build_docker.sh` builds it in a Linux Docker container on any
+host (aarch64 natively on Apple Silicon, x86_64 with `--arch x86_64`) and packages the AppImage for handhelds such
+as the AYN Odin 3:
+
+    git submodule update --init --recursive
+    ./build_docker.sh appimage
+
+See [docs/ARM64_LINUX.md](docs/ARM64_LINUX.md).
 
 ## Release
 

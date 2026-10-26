@@ -8,6 +8,7 @@
  *   IJKL d-pad (I up, K down, J left, L right). */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "guest_cpu.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -658,6 +659,9 @@ static void ffb_hook_install(void) {
     FlushInstructionCache(GetCurrentProcess(),at,32);
     printf("Runtime: FFB physics: reading the car's simulation\n");
 }
+#else
+/* The physics force feedback model reads the car through a Windows-only hook for now. */
+static void ffb_hook_install(void) {}
 #endif
 
 /* Driving options from the launcher: BB_GEARBOX (automatic, manual), BB_BRAKE_ASSIST (0 off .. 3 high),
@@ -670,6 +674,26 @@ static void ffb_hook_install(void) {
  * (a byte in the wheel settings of each of the two controller kinds, see +0x1a83b0). */
 typedef ABI void (*game_int_setter)(void *, int);
 typedef ABI void (*game_float_setter)(void *, float);
+/* The game's setters, on the game's thread (pad_read_state is called by the game): through the guest CPU
+ * where the game's code does not run on the host CPU. */
+static void game_set_int(uintptr_t setter, void *object, int value) {
+#ifdef GUEST_CPU_NATIVE
+    ((game_int_setter)setter)(object,value);
+#else
+    const uint64_t args[2]={(uint64_t)(uintptr_t)object,(uint64_t)(uint32_t)value};
+    guest_cpu_call(setter,2,args);
+#endif
+}
+static void game_set_float(uintptr_t setter, void *object, float value) {
+#ifdef GUEST_CPU_NATIVE
+    ((game_float_setter)setter)(object,value);
+#else
+    const uint64_t args[1]={(uint64_t)(uintptr_t)object};
+    uint32_t bits; memcpy(&bits,&value,4);
+    const uint64_t xmm[1]={bits};
+    guest_cpu_call_xmm(setter,1,args,1,xmm);
+#endif
+}
 static int env_choice(const char *name, const char *const *words, int count) {
     const char *e=getenv(name);
     if (!e || !*e) return -1;
@@ -701,16 +725,16 @@ static void game_options_apply(void) {
     /* the gearbox setter tells the game through its event queue (*(G+0x970)+0x590), which comes a little later */
     const unsigned char *events=*(const unsigned char *const *)(p+0x590);
     if (gearbox>=0 && *(const int *)d!=gearbox && events && *(const void *const *)(events+8)) {
-        ((game_int_setter)(runtime_image_base+0x1a33c0))(d,gearbox);
+        game_set_int(runtime_image_base+0x1a33c0,d,gearbox);
         if (changes++<20) printf("Runtime: gearbox set to %s\n",gearbox ? "automatic" : "manual");
     }
     if (brake>=0 && fabsf(*(const float *)(d+4)-(float)brake/3.0f)>0.01f) {
-        ((game_float_setter)(runtime_image_base+0x1a3490))(d,(float)brake/3.0f);
+        game_set_float(runtime_image_base+0x1a3490,d,(float)brake/3.0f);
         if (changes++<20) printf("Runtime: brake assist set to %d of 3\n",brake);
     }
     const unsigned char *handling=(const unsigned char *)(runtime_image_base+0x274be46);
     if (hardcore>=0 && (d[0x14]!=hardcore || *handling!=hardcore)) {
-        ((game_int_setter)(runtime_image_base+0x1a3a00))(d,hardcore);
+        game_set_int(runtime_image_base+0x1a3a00,d,hardcore);
         if (changes++<20) printf("Runtime: hardcore handling %s\n",hardcore ? "on" : "off");
     }
     if (wheel_assist>=0 && (s[0x1f8]!=wheel_assist || s[0x258]!=wheel_assist)) {

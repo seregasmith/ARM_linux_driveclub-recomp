@@ -208,6 +208,12 @@ if (WIN32)
     target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
     target_compile_definitions(bbnet PRIVATE MINIUPNP_STATICLIB)
     target_link_libraries(bbnet PRIVATE "${MINIUPNPC_LIBRARY}")
+else()
+    # UPnP port mapping (core/libraries/network/net_upnp.h): the system's miniupnpc.
+    find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc REQUIRED)
+    find_library(MINIUPNPC_LIBRARY NAMES miniupnpc REQUIRED)
+    target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
+    target_link_libraries(bbnet PRIVATE "${MINIUPNPC_LIBRARY}")
 endif()
 target_compile_definitions(bbnet PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(bbnet PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
@@ -246,10 +252,15 @@ if (WIN32)
     # <windows.h> out of the way of std::min/max and the Vulkan/SDL headers.
     target_compile_definitions(bbgpu PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(bbgpu PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/bb_win_compat.h)
-    target_include_directories(bbgpu PRIVATE third_party/xbyak)
     target_link_libraries(bbgpu PUBLIC Vulkan::Vulkan ws2_32 bcrypt ntdll synchronization winmm)
 else()
     target_link_libraries(bbgpu PUBLIC PkgConfig::X11)
+endif()
+
+# The SRT walker's x86-64 code generator (Xbyak, vendored). Other hosts (aarch64) interpret the walker instead
+# (shader_recompiler/ir/passes/flatten_extended_userdata_pass.cpp).
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    target_include_directories(bbgpu PRIVATE third_party/xbyak)
 endif()
 
 # bbport (Windows): bbgpu is a static library there, so the loader and the HLE runtime are
