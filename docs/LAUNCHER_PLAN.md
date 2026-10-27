@@ -125,8 +125,8 @@ folder of replacement game files built from the player's own archive and served 
 | Performance preset | Handheld, Low, Medium, High, Ultra, Custom | fills the rows below (Windows launcher's `ApplyPreset`): Handheld 720p output and render, static mirrors; Low 720p render; Medium 1440p output; High 4K output, 1440p render; Ultra 4K output and render. Changing a row below shows Custom |
 | Frame rate | 30, 60, 60 (fixed tick), Unlocked | patch + env (`BB_FPS_LIMIT`, `BB_PRESENT_MODE`) |
 | Frame cap | 30 … the display's refresh rate, default 60 (Unlocked only) | env `BB_FPS_LIMIT` |
-| Output resolution | 720p, 900p, 1080p (game), 1440p, 1800p, 4K, 5K, 8K (list) | patch; the memory patch ("Memory for up to 1440p/4K/8K") and `BB_DMEM_MB` follow the larger of output and render, as in the Windows launcher's `MemoryTier` |
-| Render resolution | 720p, 900p, 1080p (game), 1440p, 1800p, 4K, 8K (list) | patch (as above) |
+| Output resolution | 720p, 768p, 900p, 1080p (game), 1440p, 1800p, 4K, 5K, 8K (list) | patch; the memory patch ("Memory for up to 1440p/4K/8K") and `BB_DMEM_MB` follow the larger of output and render, as in the Windows launcher's `MemoryTier` |
+| Render resolution | 720p, 768p, 900p, 1080p (game), 1440p, 1800p, 4K, 8K (list) | patch (as above) |
 | Anti-aliasing | Game, FSR 3.1 | env `BB_AA` |
 | Upscaling | Native, Quality, Balanced, Performance, Ultra Perf. (FSR 3.1 only) | env `BB_AA_SCALE` |
 | Sharpness | 0 … 100 (FSR 3.1 only) | env `BB_FSR_SHARPNESS` |
@@ -221,8 +221,8 @@ non-Steam program cannot open it reliably.
 
 | key | values |
 |---|---|
-| `output` | `720p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `5k`, `8k` |
-| `render` | `720p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `8k` |
+| `output` | `720p`, `768p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `5k`, `8k` |
+| `render` | `720p`, `768p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `8k` |
 | `dlc_unlock` | `0`, `1` |
 | `fast_car_switch` | `0`, `1` |
 | `detail.own_car`, `detail.opponents`, `detail.reflections`, `detail.particles` | `0`, `1` |

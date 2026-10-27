@@ -404,6 +404,30 @@
         </PatchList>
     </Metadata>
     <Metadata Title="Driveclub"
+              Name="768p [1360x768] Internal resolution"
+              Note="1360x768 internal render resolution - 1 044 480 pixels (0.50x 1080p)"
+              Author="ARM64 Linux port (after Kravickas' sizes)"
+              PatchVer="1.0"
+              AppVer="01.28"
+              AppElf="eboot.bin">
+        <PatchList>
+            <Line Type="bytes" Address="0x016d0544" Value="50050000"/>
+            <Line Type="bytes" Address="0x016d0554" Value="00030000"/>
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Driveclub"
+              Name="768p [1360x768] Output resolution"
+              Note="1360x768 output resolution - 1 044 480 pixels (0.50x 1080p)"
+              Author="ARM64 Linux port (after Kravickas' sizes)"
+              PatchVer="1.0"
+              AppVer="01.28"
+              AppElf="eboot.bin">
+        <PatchList>
+            <Line Type="bytes" Address="0x00b54c1b" Value="50050000"/>
+            <Line Type="bytes" Address="0x00b54c21" Value="00030000"/>
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Driveclub"
               Name="900p [1600x900] Internal resolution"
               Note="1600x900 internal render resolution - 1 440 000 pixels (0.69x 1080p)"
               Author="ARM64 Linux port (after Kravickas' sizes)"

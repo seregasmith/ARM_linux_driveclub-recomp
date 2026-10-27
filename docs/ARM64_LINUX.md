@@ -135,8 +135,8 @@ grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'l
 | `update` | | the version 1.28 update dump (with `eboot.bin`); may be the same folder as `base` |
 | `base` | | the base game dump (with `game000.dat`) |
 | `preset` | `handheld` | `handheld` (720p render and output, static mirrors), `low` (720p render), `medium` (1440p output), `high` (4K output, 1440p render), `ultra` (4K output and render), `custom` (the sizes below) |
-| `output` | the preset's | `720p`, `900p`, `default` (1080p), `1440p`, `1800p`, `4k`, `5k`, `8k`; above 1080p the memory patch is added |
-| `render` | the preset's | `720p`, `900p`, `default` (1080p), `1440p`, `1800p`, `4k`, `8k` |
+| `output` | the preset's | `720p`, `768p` (1360x768), `900p` (1600x900), `default` (1080p), `1440p`, `1800p`, `4k`, `5k`, `8k`; above 1080p the memory patch is added |
+| `render` | the preset's | `720p`, `768p`, `900p`, `default` (1080p), `1440p`, `1800p`, `4k`, `8k` |
 | `fps` | `60` | `30`, `60` (60 FPS with the deltatime patch), `60fixed` (60 FPS with a fixed tick rate), `unlocked` (with `fps_cap`) |
 | `fps_cap` | `60` | the frame cap with `fps=unlocked` |
 | `fullscreen` | `1` | `0`: a window |

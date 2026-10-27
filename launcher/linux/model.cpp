@@ -152,14 +152,14 @@ void Model::Build(const std::vector<PatchInfo>& patches, int display_hz) {
            std::max(display_hz > 60 ? display_hz : 144, 60), 1, 60, " FPS");
     choice(kTabGraphics, "Resolution", "output", "Output resolution",
            "The size of the finished picture (with the menus and HUD). It is scaled to fill the screen.",
-           {{"720p", "720p"}, {"900p", "900p"}, {"default", "1080p (game)"}, {"1440p", "1440p"}, {"1800p", "1800p"},
-            {"4k", "4K"}, {"5k", "5K"}, {"8k", "8K"}},
+           {{"720p", "720p"}, {"768p", "768p"}, {"900p", "900p"}, {"default", "1080p (game)"}, {"1440p", "1440p"},
+            {"1800p", "1800p"}, {"4k", "4K"}, {"5k", "5K"}, {"8k", "8K"}},
            0, Kind::List);
     choice(kTabGraphics, "Resolution", "render", "Render resolution",
            "The size the 3D scene is drawn at before it is scaled to the output: lower is faster, higher sharper. "
            "Sizes above 1080p use more memory; the memory patch is added for you.",
-           {{"720p", "720p"}, {"900p", "900p"}, {"default", "1080p (game)"}, {"1440p", "1440p"}, {"1800p", "1800p"},
-            {"4k", "4K"}, {"8k", "8K"}},
+           {{"720p", "720p"}, {"768p", "768p"}, {"900p", "900p"}, {"default", "1080p (game)"}, {"1440p", "1440p"},
+            {"1800p", "1800p"}, {"4k", "4K"}, {"8k", "8K"}},
            0, Kind::List);
     choice(kTabGraphics, "Image quality", "aa", "Anti-aliasing",
            "FSR 3.1 replaces the game's anti-aliasing for a sharper, steadier picture and makes Upscaling possible.",
