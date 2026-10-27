@@ -18,8 +18,8 @@
 #   update=/path/CUSA00093-patch   the version 1.28 update dump (eboot.bin); may be the same as base
 #   base=/path/CUSA00093           the base game dump (game000.dat)
 #   preset=handheld                handheld (720p, static mirrors) | low | medium | high | ultra | custom
-#   output=                        default | 720p | 1440p | 1800p | 4k | 5k | 8k (default: the preset's)
-#   render=                        default | 720p | 1440p | 1800p | 4k | 8k (default: the preset's)
+#   output=                        720p | 900p | default (1080p) | 1440p | 1800p | 4k | 5k | 8k (default: the preset's)
+#   render=                        720p | 900p | default (1080p) | 1440p | 1800p | 4k | 8k (default: the preset's)
 #   fps=60                         30 | 60 (deltatime) | 60fixed | unlocked
 #   fps_cap=60                     the frame cap with fps=unlocked
 #   fullscreen=1                   0 for a window
@@ -168,19 +168,20 @@ declare -A preset_mirror=([handheld]=static [low]=live [medium]=live [high]=live
 output=${cfg[output]:-${preset_output[${cfg[preset]}]}}
 render=${cfg[render]:-${preset_render[${cfg[preset]}]}}
 mirror=${cfg[mirror]:-${preset_mirror[${cfg[preset]}]}}
-declare -A output_patch=([720p]="720p [1280x720] Output resolution" [1440p]="1440p [2560x1440] Output resolution"
+declare -A output_patch=([720p]="720p [1280x720] Output resolution" [900p]="900p [1600x900] Output resolution"
+                         [1440p]="1440p [2560x1440] Output resolution"
                          [1800p]="1800p [3200x1800] Output resolution" [4k]="4K [3840x2160] Output resolution"
                          [5k]="5K [5120x2880] Output resolution" [8k]="8K [7680x4320] Output resolution")
-declare -A render_patch=([720p]="720p [1280x720] Internal resolution"
+declare -A render_patch=([720p]="720p [1280x720] Internal resolution" [900p]="900p [1600x900] Internal resolution"
                          [1440p]="1440p [2560x1440] Internal resolution [DEPTH BUG]"
                          [1800p]="1800p [3200x1800] Internal resolution [DEPTH BUG]"
                          [4k]="4K [3840x2160] Internal resolution [DEPTH BUG]" [8k]="8K [7680x4320] Internal resolution [DEPTH BUG]")
 if [[ $output != default ]]; then
-    [[ -n ${output_patch[$output]:-} ]] || die "unknown output=$output (default, 720p, 1440p, 1800p, 4k, 5k, 8k)"
+    [[ -n ${output_patch[$output]:-} ]] || die "unknown output=$output (720p, 900p, default, 1440p, 1800p, 4k, 5k, 8k)"
     on+=("${output_patch[$output]}")
 fi
 if [[ $render != default ]]; then
-    [[ -n ${render_patch[$render]:-} ]] || die "unknown render=$render (default, 720p, 1440p, 1800p, 4k, 8k)"
+    [[ -n ${render_patch[$render]:-} ]] || die "unknown render=$render (720p, 900p, default, 1440p, 1800p, 4k, 8k)"
     on+=("${render_patch[$render]}")
 fi
 # Sizes above 1080p need the game's memory patch and a larger direct memory budget (the Windows launcher's
