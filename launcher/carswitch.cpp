@@ -1,6 +1,6 @@
 #include "carswitch.h"
 
-#include <windows.h>
+#include "fileio.h"
 
 #include <cstdio>
 #include <cstring>
@@ -22,44 +22,10 @@ constexpr float kBlurIn = 5;   // was 45 (30 hold + 15 fade)
 const char* const kFiles[3] = {"data/leveldata/canada_landscape_gui.rpk", "data/leveldata/chile_landscape_gui.rpk",
                                "data/leveldata/uk_landscape_gui_n.rpk"};
 
-std::wstring Widen(const std::string& s) {
-  if (s.empty()) return L"";
-  const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
-  std::wstring w(size_t(n), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), w.data(), n);
-  return w;
-}
-
-void MakeDirs(const std::wstring& dir) {
-  for (size_t i = 3; i <= dir.size(); ++i) {
-    if (i == dir.size() || dir[i] == L'\\') CreateDirectoryW(dir.substr(0, i).c_str(), nullptr);
-  }
-}
-
-bool WriteFile(const std::wstring& path, const std::vector<uint8_t>& data) {
-  const size_t slash = path.find_last_of(L'\\');
-  if (slash != std::wstring::npos) MakeDirs(path.substr(0, slash));
-  FILE* f = _wfopen(path.c_str(), L"wb");
-  if (!f) return false;
-  const bool ok = data.empty() || fwrite(data.data(), 1, data.size(), f) == data.size();
-  return fclose(f) == 0 && ok;
-}
-
-std::string ReadText(const std::wstring& path) {
-  FILE* f = _wfopen(path.c_str(), L"rb");
-  if (!f) return "";
-  std::string s;
-  char buf[4096];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
-  fclose(f);
-  return s;
-}
-
-uint64_t FileStamp(const std::wstring& path) {
-  WIN32_FILE_ATTRIBUTE_DATA d;
-  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &d)) return 0;
-  return (uint64_t(d.nFileSizeLow) << 20) ^ uint64_t(d.ftLastWriteTime.dwLowDateTime) ^ (uint64_t(d.nFileSizeHigh) << 40);
+using fileio::ReadText;
+using fileio::Widen;
+bool WriteFile(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
+  return fileio::WriteAll(path, data.data(), data.size());
 }
 
 // ------------------------------------------------------------------------------------------------ animation sequences
@@ -156,22 +122,19 @@ bool Retime(std::vector<uint8_t>& d, const char* name, const float from[2], cons
 
 }  // namespace
 
-std::wstring BuildFastCarSwitch(const std::wstring& update_dir, const std::wstring& base_dir, const std::wstring& out_dir) {
-  const std::wstring stamp_path = out_dir + L"\\stamp.txt";
+std::wstring BuildFastCarSwitch(const std::filesystem::path& update_dir, const std::filesystem::path& base_dir,
+                                const std::filesystem::path& out_dir) {
+  const std::filesystem::path stamp_path = out_dir / "stamp.txt";
   char stamp[256];
-  snprintf(stamp, sizeof stamp, "%s %llx %llx", kVersion, (unsigned long long)FileStamp(update_dir + L"\\game.ndx"),
-           (unsigned long long)FileStamp(base_dir + L"\\game.ndx"));
-  const auto out_path = [&](const char* file) {
-    std::wstring w = out_dir + L"\\" + Widen(file);
-    for (wchar_t& c : w) if (c == L'/') c = L'\\';
-    return w;
-  };
+  snprintf(stamp, sizeof stamp, "%s %llx %llx", kVersion, (unsigned long long)fileio::Stamp(update_dir / "game.ndx"),
+           (unsigned long long)fileio::Stamp(base_dir / "game.ndx"));
+  const auto out_path = [&](const char* file) { return out_dir / std::filesystem::path(file).make_preferred(); };
   if (ReadText(stamp_path) == stamp) {
     bool all = true;
-    for (const char* f : kFiles) all = all && GetFileAttributesW(out_path(f).c_str()) != INVALID_FILE_ATTRIBUTES;
+    for (const char* f : kFiles) all = all && fileio::Exists(out_path(f));
     if (all) return L"";
   }
-  DeleteFileW(stamp_path.c_str());
+  fileio::Remove(stamp_path);
 
   std::vector<std::vector<uint8_t>> out(3);
   for (int i = 0; i < 3; ++i) {

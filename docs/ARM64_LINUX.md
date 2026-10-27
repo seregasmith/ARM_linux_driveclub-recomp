@@ -59,25 +59,42 @@ CPU, no FEX), with the libraries from your distribution or from `nix-shell shell
 
 ## Running
 
-Copy the AppImage to the device and start it once from a terminal (or a file manager):
+Copy the AppImage to the device, make it executable (`chmod +x DriveClub-recomp-aarch64.AppImage`) and add it to
+Steam as a non-Steam game (Game Mode), or start it from a file manager.
 
-```bash
-chmod +x DriveClub-recomp-aarch64.AppImage
-./DriveClub-recomp-aarch64.AppImage --update /path/to/CUSA00093-1.28 --base /path/to/CUSA00093
-```
+It opens the **launcher** (`dc-launcher`, `launcher/linux/`, the plan in [LAUNCHER_PLAN.md](LAUNCHER_PLAN.md)):
+a full-screen settings screen made for the gamepad (Steam Input's default gamepad layout works as it is; mouse,
+touch and keyboard too). The first start searches your home folder, the SD card and USB drives for the DriveClub
+dumps (the 1.28 update and the base game) and fills both folders in; otherwise a gamepad folder browser marks the
+folders that hold them. **Play** (A on Play, or START anywhere) saves the settings, prepares the game (the first
+time it converts the image: up to a minute, with a progress bar; errors are shown there) and starts it. When the
+game exits you are back in Steam.
 
-Without `--update/--base` it opens folder pickers (zenity or kdialog) when there is a desktop. The folders are
-saved; later starts need no options, so the AppImage can be added to Steam or a frontend as it is.
+| button | in the launcher |
+|---|---|
+| D-pad / left stick | up/down: rows; left/right: change the value |
+| A | choose, switch on/off, open a list, edit text |
+| B | back; on a tab: "Quit to Steam?" |
+| L1 / R1 | previous / next tab (Play, Graphics, Detail, Game, Driving, Advanced) |
+| L2 / R2 | page up / down in long lists |
+| START | Play |
+| Y | the focused setting back to its default |
 
-There is no launcher window on Linux: the AppImage goes straight into the game. `run.sh` inside it does the Windows
-launcher's job (prepares the game from the dumps, applies the settings, starts the runtime) and takes its
-settings from a text file instead of a window.
+A dot before a setting marks one that is not at its default. Advanced → Reset all settings puts every setting back
+(the game folders stay). The defaults are the game as it starts without the launcher. To skip the launcher (a
+frontend, a second Steam entry): `./DriveClub-recomp-aarch64.AppImage --play`.
+
+Without a desktop, or with `--update DIR --base DIR` (folders saved), the AppImage starts the game directly (with
+zenity/kdialog folder pickers when the folders are missing and there is a desktop).
 
 ### Command-line options
 
 | option | |
 |---|---|
-| `--update DIR --base DIR` | set the game folders (saved), then start |
+| (none) | the launcher (the game when there is no desktop) |
+| `--play` | the game with the saved settings, without the launcher |
+| `--launcher` | the launcher, whatever else is set (`DC_NO_LAUNCHER=1`: never) |
+| `--update DIR --base DIR` | set the game folders (saved), then start the game |
 | `--setup` | choose the game folders again (folder pickers) |
 | `--config` | print the settings file's path and contents |
 | `--list-patches` | the community patches (names for `patches_on`/`patches_off`) and their defaults |
@@ -85,7 +102,7 @@ settings from a text file instead of a window.
 | `--vulkan-info` | the Vulkan driver the game will use |
 | `--help` | all options and settings |
 
-Anything else is passed on to the runtime.
+Anything else is passed on to the runtime (and starts the game).
 
 ### Files
 
@@ -96,6 +113,7 @@ Everything lives in `~/.local/share/driveclub-recomp/` (`$XDG_DATA_HOME/driveclu
 | `driveclub.conf` | the settings (below) |
 | `logs/driveclub_<date>_<time>.log` | one log per start |
 | `prep/` | the game image prepared from the dumps (converted again when the folders change) |
+| `unlock/`, `carswitch/`, `graphics/` | replacement game files built from your dumps (DLC unlock, faster car switching, graphics detail) |
 | `user/savedata/` | save games |
 | `user/shader/` | the shader cache |
 | `user/patches_enabled.txt` | the community patches in use (written at each start from the settings) |
@@ -103,9 +121,9 @@ Everything lives in `~/.local/share/driveclub-recomp/` (`$XDG_DATA_HOME/driveclu
 
 ### Settings (`driveclub.conf`)
 
-One `key=value` per line. `run.sh` reads it at every start, so a change applies from the next start, and writes it
-back (keys only: comments you add are not kept). Edit it with any text editor, or from a terminal, e.g. the
-language:
+The launcher edits it (and writes only the settings that differ from their defaults); `run.sh` reads it at every
+start. It can also be edited by hand (the launcher keeps keys it does not know, but not comments), e.g. the
+language from a terminal:
 
 ```bash
 f=~/.local/share/driveclub-recomp/driveclub.conf
@@ -116,7 +134,9 @@ grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'l
 |---|---|---|
 | `update` | | the version 1.28 update dump (with `eboot.bin`); may be the same folder as `base` |
 | `base` | | the base game dump (with `game000.dat`) |
-| `preset` | `handheld` | `handheld` (720p render and output, static mirrors), `low` (720p render), `medium` (1440p output), `high` (4K output, 1440p render), `custom` (only the patches you choose) |
+| `preset` | `handheld` | `handheld` (720p render and output, static mirrors), `low` (720p render), `medium` (1440p output), `high` (4K output, 1440p render), `ultra` (4K output and render), `custom` (the sizes below) |
+| `output` | the preset's | `default` (1080p), `720p`, `1440p`, `1800p`, `4k`, `5k`, `8k`; above 1080p the memory patch is added |
+| `render` | the preset's | `default` (1080p), `720p`, `1440p`, `1800p`, `4k`, `8k` |
 | `fps` | `60` | `30`, `60` (60 FPS with the deltatime patch), `60fixed` (60 FPS with a fixed tick rate), `unlocked` (with `fps_cap`) |
 | `fps_cap` | `60` | the frame cap with `fps=unlocked` |
 | `fullscreen` | `1` | `0`: a window |
@@ -130,6 +150,13 @@ grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'l
 | `two_thread` | `1` | `0`: switch off the two-thread draw path |
 | `name` | `Player` | the player name |
 | `language` | `1` | the console language (below) |
+| `dlc_unlock` | `0` | `1`: the add-on cars, bikes, tours and livery decals, built from your own dumps |
+| `fast_car_switch` | `0` | `1`: shorter car select animations, built from your own dumps |
+| `detail.KEY` | the game's | graphics detail (an edited copy of `global.rpk`): `own_car`, `opponents`, `reflections`, `particles` `0`/`1`; `dynamic_res`, `motion_blur`, `lens_dust`, `heat_haze`, `fxaa` `1`/`0`; `scenery`, `shadows` `game`/`high`/`ultra` |
+| `gearbox` | `game` | `game` (the game's Options menu), `automatic`, `manual` |
+| `brake_assist` | `game` | `game`, `off`, `low`, `medium`, `high` |
+| `hardcore`, `wheel_assist` | `game` | `game`, `off`, `on` |
+| `overlays` | `0` | `1`: Vulkan layers that install themselves are let into the game |
 | `patches_on` | | extra community patches by name, separated by `;` (`--list-patches`) |
 | `patches_off` | | patches switched off, the same way |
 | `env.NAME` | | any variable for the runtime (`env.BB_...`, BUILDING.md lists the diagnostics ones) or FEXCore (`env.FEX_...`, see Tuning) |
@@ -151,7 +178,8 @@ Variables already set in the environment (`BB_*`, `DC_*`) win over the file.
 
 ### Checks
 
-`--vulkan-info` shows the Vulkan driver the game gets (the bundled Turnip on Adreno). `--cpu-selftest` runs a few
+The launcher's Advanced tab runs both and shows the newest log. `--vulkan-info` shows the Vulkan driver the game
+gets (the bundled Turnip on Adreno). `--cpu-selftest` runs a few
 x86-64 functions through FEXCore without the game (calls both ways, SSE/AVX, atomics, four threads, RDTSC), then
 measures its speed. On an Apple M-series Linux VM it reports about 2.8 billion iterations/s for its integer loop
 (native ARM64: 4.4), 34 ns per call from game code into the runtime and 92 ns per call back.
@@ -174,16 +202,19 @@ measures its speed. On an Apple M-series Linux VM it reports about 2.8 billion i
 - `tools/dc_prepare.cpp`: the launcher's preparation (`launcher/prepare.cpp`, unchanged) as a command.
 - `tools/cpu_selftest.c`: the guest CPU's crossings checked without the game (`run.sh --cpu-selftest`; the
   package build runs it too).
-- `run.sh`: the launcher's job on Linux; `build.sh` builds on Linux; `shell.nix`, `packaging/` and
+- `launcher/linux/`: the Linux launcher (`dc-launcher`, SDL3 and Dear ImGui); `run.sh` turns its settings into the
+  patches, variables and folders the runtime takes; `build.sh` builds on Linux; `shell.nix`, `packaging/` and
   `build_docker.sh` for the Docker build and the AppImage.
+- `launcher/datx.cpp`, `unlock.cpp`, `graphics.cpp`, `carswitch.cpp`: portable C++ now (`launcher/fileio.h`), so
+  dc-prepare builds the add-on content unlock, graphics detail and faster car switching on Linux too
+  (`--unlock`, `--detail`, `--car-switch`).
 
 ## Not on Linux yet
 
 These use Windows APIs and stay Windows-only for now: the high-FPS camera/replay workaround (`BB_CAMERA_PATCH`),
 the field-of-view slider and F5/F6, the menu key-repeat timing fix, the scene overlay's time-of-day telemetry, the
-motion-blur exposure clock, the physics force-feedback model's car hook, add-on content unlock, graphics detail
-and faster car switching (they edit copies of the game's archives with Windows file calls), DLSS and the
-Windows launcher itself. The game runs without them, as it does on Windows when they are off.
+motion-blur exposure clock, the physics force-feedback model's car hook, wheel setup, DLSS, frame generation, HDR
+and the update checker. The game runs without them, as it does on Windows when they are off.
 
 Online play does not work on any platform; on ARM64 the network module's callbacks are routed through the guest
 CPU, but push events that pass pointers to host stack data are untested.
@@ -199,5 +230,7 @@ statistics to the log every 5 seconds.
 
 The first full build with `build_docker.sh` (Apple Silicon, FEX main of 2026-10-25) produced the AppImage; its
 package check passed, `dc-cpu-selftest` passes with FEXCore in an ARM64 Linux VM, and on an Odin 3 (Armada OS) the
-AppImage starts the game. Frame rate and rendering on the Odin 3 are still to be measured. Report problems with the log file and, for a
-crash, the lines starting with `Guest fault`, `Host fault` or `STOP:`.
+AppImage starts the game. The launcher was tested off-screen (every page and dialog drawn, a scripted walk through
+the menus, its settings checked against `run.sh`), not yet on the Odin 3 with Steam Input. Frame rate and rendering
+on the Odin 3 are still to be measured. Report problems with the log file and, for a crash, the lines starting with
+`Guest fault`, `Host fault` or `STOP:`.

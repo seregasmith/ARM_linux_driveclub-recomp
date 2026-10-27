@@ -1,6 +1,7 @@
 // Graphics detail the PS4 version keeps low, and the game's camera effects: an edited copy of the game's global.rpk
 // with other values in its quality files (viewportquality.xml, vehiclelodgroupdata.xml).
 #pragma once
+#include <filesystem>
 #include <string>
 
 struct GraphicsChoice {
@@ -26,5 +27,5 @@ struct GraphicsChoice {
 // every choice is at the game's default, the file is removed and nothing needs to be served (`active` false).
 // Skips the work when the file in `out_dir` already matches the archive and the choices. Returns "" or a short
 // description of a problem.
-std::wstring BuildGraphics(const std::wstring& update_dir, const std::wstring& base_dir, const std::wstring& out_dir,
-                           const GraphicsChoice& choice, bool& active);
+std::wstring BuildGraphics(const std::filesystem::path& update_dir, const std::filesystem::path& base_dir,
+                           const std::filesystem::path& out_dir, const GraphicsChoice& choice, bool& active);

@@ -12,7 +12,7 @@ let
   arm = pkgs.stdenv.hostPlatform.isAarch64;
   root = ./..;
   wanted = [
-    "run.sh" "out" "out/DriveClubGame" "out/dc-prepare" "out/dc-cpu-selftest" "out/gpu" "out/gpu/libbbgpu.so" "patches"
+    "run.sh" "out" "out/DriveClubGame" "out/dc-launcher" "out/dc-prepare" "out/dc-cpu-selftest" "out/gpu" "out/gpu/libbbgpu.so" "patches"
     "patches/DriveClub.xml" "packaging" "packaging/dc_vulkan.py"
   ] ++ lib.optionals arm [ "out/fex" "out/fex/libbbcpu.so" ];
   src = builtins.path {
@@ -125,13 +125,14 @@ pkgs.stdenv.mkDerivation {
     install -m644 patches/DriveClub.xml $d/patches/DriveClub.xml
     install -m644 packaging/dc_vulkan.py $d/dc_vulkan.py
     install -m755 out/DriveClubGame $d/bin/DriveClubGame
+    install -m755 out/dc-launcher $d/bin/dc-launcher
     install -m755 out/dc-prepare $d/bin/dc-prepare
     install -m755 out/dc-cpu-selftest $d/bin/dc-cpu-selftest
     install -Dm755 out/gpu/libbbgpu.so $d/bin/gpu/libbbgpu.so
     ${lib.optionalString arm "install -Dm755 out/fex/libbbcpu.so $d/bin/cpu/libbbcpu.so"}
     # Their debug info names the build environment's headers (the full compilers, Vulkan headers): Nix took
     # those for dependencies. Symbols stay (crash reports).
-    ${pkgs.binutils-unwrapped}/bin/strip --strip-debug $d/bin/DriveClubGame $d/bin/dc-prepare $d/bin/dc-cpu-selftest
+    ${pkgs.binutils-unwrapped}/bin/strip --strip-debug $d/bin/DriveClubGame $d/bin/dc-launcher $d/bin/dc-prepare $d/bin/dc-cpu-selftest
     runHook postInstall
   '';
   postFixup = ''
@@ -156,7 +157,7 @@ pkgs.stdenv.mkDerivation {
     # program), run.sh parses, dc-prepare reads the patches, dc_vulkan.py compiles, and the guest CPU (FEXCore on
     # aarch64) runs x86-64 code: calls both ways, SSE/AVX, atomics, threads (4 KB-page kernels only, as the game).
     d=$out/share/driveclub
-    for b in $d/bin/DriveClubGame $d/bin/dc-prepare $d/bin/dc-cpu-selftest; do
+    for b in $d/bin/DriveClubGame $d/bin/dc-launcher $d/bin/dc-prepare $d/bin/dc-cpu-selftest; do
       if LD_TRACE_LOADED_OBJECTS=1 $b | grep -q 'not found'; then
         echo "selftest: libraries of $b not found:" >&2
         LD_TRACE_LOADED_OBJECTS=1 $b | grep 'not found' >&2
@@ -166,6 +167,20 @@ pkgs.stdenv.mkDerivation {
     ${pkgs.bash}/bin/bash -n $d/run.sh
     $d/bin/dc-prepare --patches-xml $d/patches/DriveClub.xml --list > /dev/null
     ${python}/bin/python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' $d/dc_vulkan.py
+    # The launcher draws every page off-screen (SDL's offscreen video driver, software rendering). Exit code 2: SDL
+    # could not open a window here at all, which says nothing about the package.
+    mkdir -p $TMPDIR/launcher-home
+    set +e
+    HOME=$TMPDIR/launcher-home SDL_VIDEODRIVER=offscreen SDL_RENDER_DRIVER=software \
+      $d/bin/dc-launcher --selftest --window --data $TMPDIR/launcher-home/data --patches-xml $d/patches/DriveClub.xml \
+      --run-sh $d/run.sh --bin $d/bin > $TMPDIR/launcher.log 2>&1
+    status=$?
+    set -e
+    if [ $status = 2 ]; then
+      echo "selftest: the launcher could not open an off-screen window here (not checked):"; cat $TMPDIR/launcher.log
+    elif [ $status != 0 ]; then
+      echo "selftest: the launcher failed ($status):" >&2; cat $TMPDIR/launcher.log >&2; exit 1
+    fi
     if [ "$(getconf PAGESIZE)" = 4096 ]; then
       $d/bin/dc-cpu-selftest --quick
     else

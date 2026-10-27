@@ -19,7 +19,8 @@ This produces `out/DriveClubGame.exe`.
 
 ## Linux and ARM64 (AppImage)
 
-On Linux `bash build.sh` builds `out/DriveClubGame` (the runtime), `out/gpu/libbbgpu.so`, `out/dc-prepare`
+On Linux `bash build.sh` builds `out/DriveClubGame` (the runtime), `out/gpu/libbbgpu.so`, `out/dc-launcher` (the
+gamepad launcher `bash run.sh` opens, docs/LAUNCHER_PLAN.md), `out/dc-prepare`
 (the launcher's preparation as a command) and `out/dc-cpu-selftest` (the guest CPU checked without the game:
 `bash run.sh --cpu-selftest`); `bash run.sh` prepares the game and starts it. The dependencies are in
 `shell.nix` (`nix-shell shell.nix`, or your distribution's packages of the same names).

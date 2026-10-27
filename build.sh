@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the game runtime. See BUILDING.md.
 #   Windows (MSYS2 CLANG64): out/DriveClubGame.exe
-#   Linux x86-64 / aarch64:  out/DriveClubGame, out/gpu/libbbgpu.so, out/dc-prepare, out/dc-cpu-selftest
+#   Linux x86-64 / aarch64:  out/DriveClubGame, out/gpu/libbbgpu.so, out/dc-launcher, out/dc-prepare,
+#                            out/dc-cpu-selftest
 #                            (aarch64 also out/fex/libbbcpu.so: the game's x86-64 code runs in FEXCore's JIT)
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
@@ -119,7 +120,28 @@ selftest=(tools/cpu_selftest.c)
 "$CC" -std=c11 -O2 -g -Wall -Wextra -pthread -Isrc "${selftest[@]}" "${cpu[@]}" -o out/dc-cpu-selftest
 echo "Built $PWD/out/dc-cpu-selftest"
 
+# The launcher (launcher/linux/, docs/LAUNCHER_PLAN.md): SDL3 and Dear ImGui (gpu/third_party/imgui), its font
+# embedded. ImGui is compiled once, without this project's warning policy.
+imgui=gpu/third_party/imgui
+imgui_src=("$imgui/imgui.cpp" "$imgui/imgui_draw.cpp" "$imgui/imgui_tables.cpp" "$imgui/imgui_widgets.cpp"
+           "$imgui/backends/imgui_impl_sdl3.cpp" "$imgui/backends/imgui_impl_sdlrenderer3.cpp")
+read -r -a sdl_cflags <<< "$(pkg-config --cflags sdl3)"
+read -r -a sdl_libs <<< "$(pkg-config --libs sdl3)"
+if [[ ! -f out/libimgui.a || -n $(find "$imgui" -maxdepth 2 -newer out/libimgui.a -name '*.cpp' -print -quit) ]]; then
+    rm -rf out/imgui && mkdir -p out/imgui
+    for source in "${imgui_src[@]}"; do
+        "$CXX" -std=c++20 -O2 -g -w -fPIC "${sdl_cflags[@]}" -I"$imgui" -c "$source" -o "out/imgui/$(basename "${source%.cpp}").o"
+    done
+    ar rcs out/libimgui.a out/imgui/*.o
+fi
+"$CXX" -std=c++20 -O2 -g -Wall -Wextra -pthread "${sdl_cflags[@]}" -I"$imgui" -I"$imgui/backends" \
+    -DDC_FONT_PATH="\"$PWD/gpu/third_party/fonts/DejaVuSans.ttf\"" -ffile-prefix-map="$PWD"=. \
+    launcher/linux/app.cpp launcher/linux/model.cpp launcher/linux/conf.cpp launcher/linux/game.cpp out/libimgui.a \
+    "${sdl_libs[@]}" -o out/dc-launcher
+echo "Built $PWD/out/dc-launcher"
+
 # First-run preparation (the launcher's, launcher/prepare.cpp) as a command for run.sh.
-"$CXX" -std=c++20 -O2 -Wall -Wextra tools/dc_prepare.cpp -o out/dc-prepare
+"$CXX" -std=c++20 -O2 -Wall -Wextra tools/dc_prepare.cpp launcher/datx.cpp launcher/unlock.cpp launcher/graphics.cpp \
+    launcher/carswitch.cpp -o out/dc-prepare
 echo "Built $PWD/out/dc-prepare"
 

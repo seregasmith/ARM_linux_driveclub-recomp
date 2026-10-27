@@ -7,9 +7,9 @@
 # Data (prepared image, saves, shader cache, logs, driveclub.conf): ~/.local/share/driveclub-recomp (DC_DATA_DIR).
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
-[[ -f out/DriveClubGame && -f out/dc-prepare && -f out/dc-cpu-selftest && -f out/gpu/libbbgpu.so ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
+[[ -f out/DriveClubGame && -f out/dc-launcher && -f out/dc-prepare && -f out/dc-cpu-selftest && -f out/gpu/libbbgpu.so ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
 arch=$(uname -m)
-libs=(out/DriveClubGame out/dc-prepare out/dc-cpu-selftest out/gpu/libbbgpu.so)
+libs=(out/DriveClubGame out/dc-launcher out/dc-prepare out/dc-cpu-selftest out/gpu/libbbgpu.so)
 if [[ $arch == aarch64 ]]; then
     [[ -f out/fex/libbbcpu.so ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
     libs+=(out/fex/libbbcpu.so)

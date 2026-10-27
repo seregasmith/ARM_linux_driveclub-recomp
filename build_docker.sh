@@ -15,7 +15,8 @@
 # Usage:  ./build_docker.sh [--arch aarch64|x86_64] [build|appimage|shell|clean]
 #   --arch    target architecture (or DC_ARCH=...; arm64 and amd64 work too). Default: Docker's own
 #             architecture, which needs no emulation (aarch64 on Apple Silicon, x86_64 on a PC)
-#   build     (default) build.sh: out/DriveClubGame (the runtime), out/dc-prepare (the game's
+#   build     (default) build.sh: out/DriveClubGame (the runtime), out/dc-launcher (the launcher),
+#             out/dc-prepare (the game's
 #             preparation from the dumps), out/gpu/libbbgpu.so, and on aarch64 out/fex/libbbcpu.so
 #             (FEXCore)
 #   appimage  build, then dist/DriveClub-recomp-<arch>.AppImage (packaging/appimage.sh with
@@ -461,7 +462,7 @@ echo "==> Building for ${DC_ARCH} (BB_LTO=${BB_LTO}, BB_PGO=${BB_PGO:-build.sh d
 in_shell "the build" 'PATH=/tmp/dcwrap:$PATH bash build.sh'
 echo "==> Built:"
 in_shell "the build summary" \
-    'for f in out/DriveClubGame out/dc-prepare out/dc-cpu-selftest out/gpu/libbbgpu.so out/fex/*.so; do [ -f "$f" ] && printf "  %-24s %s\n" "$f" "$(readelf -h "$f" | sed -n "s/ *Machine: *//p")"; done; true'
+    'for f in out/DriveClubGame out/dc-launcher out/dc-prepare out/dc-cpu-selftest out/gpu/libbbgpu.so out/fex/*.so; do [ -f "$f" ] && printf "  %-24s %s\n" "$f" "$(readelf -h "$f" | sed -n "s/ *Machine: *//p")"; done; true'
 if [ "$mode" = appimage ]; then
     # appimage.sh names the bundler without a commit (github:ralismark/nix-appimage), so Nix asks
     # GitHub's API for its latest commit: 60 anonymous requests per hour per IP, often used up on

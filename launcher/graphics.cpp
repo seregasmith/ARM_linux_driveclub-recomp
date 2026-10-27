@@ -1,6 +1,6 @@
 #include "graphics.h"
 
-#include <windows.h>
+#include "fileio.h"
 
 #include <cstdio>
 #include <cstring>
@@ -24,43 +24,10 @@ namespace {
 
 constexpr const char* kVersion = "graphics-2";
 
-std::wstring Widen(const std::string& s) {
-  if (s.empty()) return L"";
-  const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
-  std::wstring w(size_t(n), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), w.data(), n);
-  return w;
-}
-
-void MakeDirs(const std::wstring& dir) {
-  for (size_t i = 3; i <= dir.size(); ++i) {
-    if (i == dir.size() || dir[i] == L'\\') CreateDirectoryW(dir.substr(0, i).c_str(), nullptr);
-  }
-}
-
-bool WriteFile(const std::wstring& path, const void* data, size_t size) {
-  FILE* f = _wfopen(path.c_str(), L"wb");
-  if (!f) return false;
-  const bool ok = size == 0 || fwrite(data, 1, size, f) == size;
-  return fclose(f) == 0 && ok;
-}
-
-std::string ReadText(const std::wstring& path) {
-  FILE* f = _wfopen(path.c_str(), L"rb");
-  if (!f) return "";
-  std::string s;
-  char buf[4096];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
-  fclose(f);
-  return s;
-}
-
-uint64_t FileStamp(const std::wstring& path) {
-  WIN32_FILE_ATTRIBUTE_DATA d;
-  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &d)) return 0;
-  return (uint64_t(d.nFileSizeLow) << 20) ^ uint64_t(d.ftLastWriteTime.dwLowDateTime) ^ (uint64_t(d.nFileSizeHigh) << 40);
-}
+using fileio::MakeDirs;
+using fileio::ReadText;
+using fileio::Widen;
+bool WriteFile(const std::filesystem::path& path, const void* data, size_t size) { return fileio::WriteAll(path, data, size); }
 
 struct Attr {
   const char* name;
@@ -268,24 +235,24 @@ std::string Describe(const GraphicsChoice& c) {
 
 }  // namespace
 
-std::wstring BuildGraphics(const std::wstring& update_dir, const std::wstring& base_dir, const std::wstring& out_dir,
-                           const GraphicsChoice& choice, bool& active) {
+std::wstring BuildGraphics(const std::filesystem::path& update_dir, const std::filesystem::path& base_dir,
+                           const std::filesystem::path& out_dir, const GraphicsChoice& choice, bool& active) {
   active = false;
-  const std::wstring pack_path = out_dir + L"\\global.rpk", stamp_path = out_dir + L"\\stamp.txt";
+  const std::filesystem::path pack_path = out_dir / "global.rpk", stamp_path = out_dir / "stamp.txt";
   if (choice.Default()) {
-    DeleteFileW(pack_path.c_str());
-    DeleteFileW(stamp_path.c_str());
+    fileio::Remove(pack_path);
+    fileio::Remove(stamp_path);
     return L"";
   }
   char stamp[256];
-  snprintf(stamp, sizeof stamp, "%s %llx %llx %s", kVersion, (unsigned long long)FileStamp(update_dir + L"\\game.ndx"),
-           (unsigned long long)FileStamp(base_dir + L"\\game.ndx"), Describe(choice).c_str());
-  if (ReadText(stamp_path) == stamp && GetFileAttributesW(pack_path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+  snprintf(stamp, sizeof stamp, "%s %llx %llx %s", kVersion, (unsigned long long)fileio::Stamp(update_dir / "game.ndx"),
+           (unsigned long long)fileio::Stamp(base_dir / "game.ndx"), Describe(choice).c_str());
+  if (ReadText(stamp_path) == stamp && fileio::Exists(pack_path)) {
     active = true;
     return L"";
   }
-  DeleteFileW(stamp_path.c_str());
-  DeleteFileW(pack_path.c_str());
+  fileio::Remove(stamp_path);
+  fileio::Remove(pack_path);
 
   std::vector<uint8_t> pack;
   std::string err = DatxExtract(update_dir, base_dir, "global.rpk", pack);
@@ -309,7 +276,7 @@ std::wstring BuildGraphics(const std::wstring& update_dir, const std::wstring& b
   }
   MakeDirs(out_dir);
   if (!WriteFile(pack_path, pack.data(), pack.size()) || !WriteFile(stamp_path, stamp, strlen(stamp))) {
-    DeleteFileW(pack_path.c_str());
+    fileio::Remove(pack_path);
     return L"the graphics file could not be written";
   }
   active = true;

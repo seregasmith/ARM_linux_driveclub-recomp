@@ -1,6 +1,6 @@
 #include "datx.h"
 
-#include <windows.h>
+#include "fileio.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -11,17 +11,8 @@ namespace {
 uint32_t Rd32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (uint32_t(p[3]) << 24); }
 uint64_t Rd64(const uint8_t* p) { return uint64_t(Rd32(p)) | (uint64_t(Rd32(p + 4)) << 32); }
 
-bool ReadFile(const std::wstring& path, std::vector<uint8_t>& out) {
-  FILE* f = _wfopen(path.c_str(), L"rb");
-  if (!f) return false;
-  fseek(f, 0, SEEK_END);
-  const long long n = _ftelli64(f);
-  fseek(f, 0, SEEK_SET);
-  out.resize(size_t(n));
-  const bool ok = n == 0 || fread(out.data(), 1, size_t(n), f) == size_t(n);
-  fclose(f);
-  return ok;
-}
+namespace fs = std::filesystem;
+using fileio::ReadAll;
 
 
 // The name hash of the archive (all arithmetic wraps at 32 bits).
@@ -74,18 +65,18 @@ bool Lz4Block(const uint8_t* src, size_t n, uint8_t* dst, size_t dsize) {
   return o == dsize;
 }
 
-std::wstring VolumeName(unsigned vol) {
-  wchar_t buf[32];
-  swprintf(buf, 32, L"game%03u.dat", vol);
+std::string VolumeName(unsigned vol) {
+  char buf[32];
+  snprintf(buf, sizeof buf, "game%03u.dat", vol);
   return buf;
 }
 
 }  // namespace
 
-std::string DatxExtract(const std::wstring& update_dir, const std::wstring& base_dir, const std::string& path,
+std::string DatxExtract(const fs::path& update_dir, const fs::path& base_dir, const std::string& path,
                         std::vector<uint8_t>& out) {
   std::vector<uint8_t> ndx;
-  if (!ReadFile(update_dir + L"\\game.ndx", ndx) && !ReadFile(base_dir + L"\\game.ndx", ndx)) return "game.ndx not found";
+  if (!ReadAll(update_dir / "game.ndx", ndx) && !ReadAll(base_dir / "game.ndx", ndx)) return "game.ndx not found";
   if (ndx.size() < 0x40 || memcmp(ndx.data(), "DATX", 4) != 0) return "game.ndx has an unexpected format";
   const uint64_t filetime = Rd64(&ndx[8]);
   const uint32_t seed_a = Rd32(&ndx[0x18]), seed_b = Rd32(&ndx[0x1C]);
@@ -120,13 +111,9 @@ std::string DatxExtract(const std::wstring& update_dir, const std::wstring& base
   const uint64_t offset = filetime <= old_style ? (loc >> 8) : (loc >> 16);
 
   std::vector<uint8_t> dat;
-  std::wstring dat_path = update_dir + L"\\" + VolumeName(vol);
-  FILE* f = _wfopen(dat_path.c_str(), L"rb");
-  if (!f) {
-    dat_path = base_dir + L"\\" + VolumeName(vol);
-    f = _wfopen(dat_path.c_str(), L"rb");
-  }
-  if (!f) return "volume file missing: " + std::string(VolumeName(vol).begin(), VolumeName(vol).end());
+  FILE* f = fileio::Open(update_dir / VolumeName(vol), "rb");
+  if (!f) f = fileio::Open(base_dir / VolumeName(vol), "rb");
+  if (!f) return "volume file missing: " + VolumeName(vol);
 
   std::string err;
   uint8_t head[0x24];
@@ -161,7 +148,7 @@ std::string DatxExtract(const std::wstring& update_dir, const std::wstring& base
         std::fill(plain.begin(), plain.end(), 0);
       } else {
         raw.resize(stored);
-        if (_fseeki64(f, static_cast<long long>(pos), SEEK_SET) != 0 || fread(raw.data(), 1, stored, f) != stored) {
+        if (fileio::Seek(f, pos) != 0 || fread(raw.data(), 1, stored, f) != stored) {
           err = "volume file is cut short";
           break;
         }
@@ -192,13 +179,12 @@ std::string DatxExtract(const std::wstring& update_dir, const std::wstring& base
 }
 
 // Size a volume must have: header, chunk table and every stored chunk. 0 when the header cannot be read.
-static uint64_t VolumeExpectedSize(const std::wstring& path, uint64_t& actual) {
-  FILE* f = _wfopen(path.c_str(), L"rb");
+static uint64_t VolumeExpectedSize(const fs::path& path, uint64_t& actual) {
+  FILE* f = fileio::Open(path, "rb");
   if (!f) return 0;
   uint64_t expected = 0;
   uint8_t head[0x24];
-  if (_fseeki64(f, 0, SEEK_END) == 0) actual = static_cast<uint64_t>(_ftelli64(f));
-  _fseeki64(f, 0, SEEK_SET);
+  actual = fileio::SizeOf(f);
   if (fread(head, 1, sizeof head, f) == sizeof head && memcmp(head, "DATF", 4) == 0 && memcmp(head + 0x20, "CHNK", 4) == 0) {
     const uint32_t count = Rd32(head + 0x18);
     if (count != 0 && count <= 4000000) {
@@ -213,10 +199,10 @@ static uint64_t VolumeExpectedSize(const std::wstring& path, uint64_t& actual) {
   return expected;
 }
 
-std::string DatxCheckVolumes(const std::wstring& update_dir, const std::wstring& base_dir, unsigned& used,
+std::string DatxCheckVolumes(const fs::path& update_dir, const fs::path& base_dir, unsigned& used,
                              std::vector<unsigned>& missing, std::vector<unsigned>* truncated) {
   std::vector<uint8_t> ndx;
-  if (!ReadFile(update_dir + L"\\game.ndx", ndx) && !ReadFile(base_dir + L"\\game.ndx", ndx)) return "game.ndx not found";
+  if (!ReadAll(update_dir / "game.ndx", ndx) && !ReadAll(base_dir / "game.ndx", ndx)) return "game.ndx not found";
   if (ndx.size() < 0x40 || memcmp(ndx.data(), "DATX", 4) != 0) return "game.ndx has an unexpected format";
   const uint64_t filetime = Rd64(&ndx[8]);
   const uint32_t files = Rd32(&ndx[0x38]);
@@ -242,9 +228,9 @@ std::string DatxCheckVolumes(const std::wstring& update_dir, const std::wstring&
   for (unsigned vol = 0; vol < seen.size(); ++vol) {
     if (!seen[vol]) continue;
     ++used;
-    const std::wstring in_update = update_dir + L"\\" + VolumeName(vol), in_base = base_dir + L"\\" + VolumeName(vol);
-    const bool have_update = GetFileAttributesW(in_update.c_str()) != INVALID_FILE_ATTRIBUTES;
-    if (!have_update && GetFileAttributesW(in_base.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    const fs::path in_update = update_dir / VolumeName(vol), in_base = base_dir / VolumeName(vol);
+    const bool have_update = fileio::Exists(in_update);
+    if (!have_update && !fileio::Exists(in_base)) {
       missing.push_back(vol);
     } else if (truncated) {
       uint64_t actual = 0;
@@ -255,9 +241,9 @@ std::string DatxCheckVolumes(const std::wstring& update_dir, const std::wstring&
   return "";
 }
 
-bool DatxContains(const std::wstring& update_dir, const std::wstring& base_dir, const std::string& path) {
+bool DatxContains(const fs::path& update_dir, const fs::path& base_dir, const std::string& path) {
   std::vector<uint8_t> ndx;
-  if (!ReadFile(update_dir + L"\\game.ndx", ndx) && !ReadFile(base_dir + L"\\game.ndx", ndx)) return false;
+  if (!ReadAll(update_dir / "game.ndx", ndx) && !ReadAll(base_dir / "game.ndx", ndx)) return false;
   if (ndx.size() < 0x40 || memcmp(ndx.data(), "DATX", 4) != 0) return false;
   const uint32_t seed_a = Rd32(&ndx[0x18]), seed_b = Rd32(&ndx[0x1C]);
   const uint32_t files = Rd32(&ndx[0x38]);

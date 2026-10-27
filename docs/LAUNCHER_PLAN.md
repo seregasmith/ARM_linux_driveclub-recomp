@@ -1,7 +1,17 @@
 # Linux launcher: plan
 
-Status: **plan, not implemented yet.** Decided with the project owner on 2026-10-27; the "Defaults chosen" section
-lists the points that can still change.
+Status: **implemented** (2026-10-27): `launcher/linux/` (dc-launcher), `run.sh`, `tools/dc_prepare.cpp` and the
+portable `launcher/datx.cpp`, `unlock.cpp`, `graphics.cpp`, `carswitch.cpp` (`launcher/fileio.h`). Tested
+off-screen; not yet on the device. Where the implementation differs from the plan below:
+
+- X has no "longer explanation": the help bar shows each setting's whole text. X deletes in the on-screen keyboard.
+- The launcher writes only the settings that differ from their defaults; run.sh changes only the folder lines.
+- The Play tab shows the main settings under the Play button instead of separate status lines.
+- `dc-prepare --unlock`, `--car-switch`, `--detail KEY=VALUE` (instead of folder arguments): the folders are fixed
+  (`<data>/unlock`, `carswitch`, `graphics`) and `prep/mods.txt` lists the ones the runtime serves.
+- The folder browser's B goes back to the previous folder; Y uses the focused folder.
+
+The original plan follows.
 
 Today the AppImage goes straight into the game and every setting is a line in `driveclub.conf`. This plan adds a
 launcher in the spirit of the Windows one (`launcher/driveclub_launcher.cpp`), made for a handheld: it runs in
