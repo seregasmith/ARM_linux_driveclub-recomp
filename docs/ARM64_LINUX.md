@@ -158,7 +158,7 @@ grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'l
 | `language` | `1` | the console language (below) |
 | `dlc_unlock` | `0` | `1`: the add-on cars, bikes, tours and livery decals, built from your own dumps |
 | `fast_car_switch` | `0` | `1`: shorter car select animations, built from your own dumps |
-| `detail.KEY` | the game's | graphics detail (an edited copy of `global.rpk`): `own_car`, `opponents`, `reflections`, `particles` `0`/`1`; `dynamic_res`, `motion_blur`, `lens_dust`, `heat_haze`, `fxaa` `1`/`0`; `scenery`, `shadows` `game`/`high`/`ultra` |
+| `detail.KEY` | the game's | graphics detail (an edited copy of `global.rpk`): `own_car`, `reflections` `0`/`1`; `opponents`, `particles` `low`/`0`/`1`; `dynamic_res`, `motion_blur`, `lens_dust`, `heat_haze`, `fxaa` `1`/`0`; `scenery`, `shadows` `low`/`game`/`high`/`ultra` (Low: below) |
 | `gearbox` | `game` | `game` (the game's Options menu), `automatic`, `manual` |
 | `brake_assist` | `game` | `game`, `off`, `low`, `medium`, `high` |
 | `hardcore`, `wheel_assist` | `game` | `game`, `off`, `on` |
@@ -265,6 +265,22 @@ FEXCore reads its options from `FEX_*` variables; set them with `env.` lines in 
 `env.FEX_TSOENABLED=0` (no x86 memory-ordering emulation: faster, but the game's threads may then see each other's
 writes out of order and crash) or `env.FEX_MULTIBLOCK=1` (the default). `env.BB_FRAME_STATS=1` writes the frame
 statistics to the log every 5 seconds.
+
+**Low detail (Detail tab).** Below the game's own values, for a slow GPU or CPU. The other levels set fixed values;
+Low changes the game's own values in `viewportquality.xml` relative to what your archive has, and only where it has
+them:
+
+| row | Low |
+|---|---|
+| Other cars | `unviewed_vehicle` LOD bias +1: one detail step coarser at every distance |
+| Scenery detail | `static_objects`, `dynamic_objects`, `transient` LOD bias +1 (the ground keeps the game's), and the PS4's cull limit: `BB_CULL_SCALE=1` instead of the runtime's 0.25, so small objects are left out as early as on PS4 (fewer draws, more pop-in) |
+| Shadows | the PS4's cull limit for shadow casters (`BB_CULL_SCALE_SHADOW=1`), and the nearest cascade (to 4 m) filtered with the engine's 8 samples instead of 32 in the race views that set 32 |
+| Particles | the particle limit halved (`ScreenRush` `ParticleLimitScalar` × 0.5) |
+
+`~/.local/share/driveclub-recomp/graphics/changes.txt` lists every value the build changed (old → new) and what
+this archive does not have; `viewportquality.xml.orig` next to it is the game's own file, for comparing. An
+`env.BB_CULL_SCALE` or `env.BB_CULL_SCALE_SHADOW` line of your own wins over Low. To measure, `env.BB_BENCHMARK=1`
+starts an AI race and writes the average and 1 % low FPS to the log.
 
 ## Status
 

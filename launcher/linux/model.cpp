@@ -211,19 +211,23 @@ void Model::Build(const std::vector<PatchInfo>& patches, int display_hz) {
     // ---- Detail: an edited copy of the game's global.rpk (launcher/graphics.cpp), built from your own dump.
     toggle(kTabDetail, "Models", "detail.own_car", "Your car: full detail",
            "Draws your car with its most detailed model in races; the PS4 version uses the next one down.", false);
-    toggle(kTabDetail, "Models", "detail.opponents", "Other cars: full detail",
-           "The other cars get their most detailed models up close too.", false);
-    choice(kTabDetail, "Models", "detail.scenery", "Scenery detail (less pop-in)",
-           "Trees, rocks and roadside objects keep their detail further away. High: the pre-race camera's values; "
-           "Ultra: photo mode's.",
-           {{"game", "Game"}, {"high", "High"}, {"ultra", "Ultra"}}, 0);
+    choice(kTabDetail, "Models", "detail.opponents", "Other cars",
+           "Full detail: their most detailed models up close too. Low: one detail step coarser at every distance, "
+           "cheaper with a full grid.",
+           {{"low", "Low"}, {"0", "Game"}, {"1", "Full detail"}}, 1);
+    choice(kTabDetail, "Models", "detail.scenery", "Scenery detail",
+           "Trees, rocks and roadside objects. Low: simpler models sooner, and small objects disappear as early as on "
+           "PS4 (more pop-in). High: the pre-race camera's values (less pop-in); Ultra: photo mode's.",
+           {{"low", "Low"}, {"game", "Game"}, {"high", "High"}, {"ultra", "Ultra"}}, 1);
     toggle(kTabDetail, "Models", "detail.reflections", "High-quality reflections",
            "Photo mode's finer reflections on the road and the cars, in races.", false);
-    choice(kTabDetail, "Models", "detail.shadows", "Shadow edges",
-           "Smoother shadow edges further than 4 m: the game uses 8 samples, High 16, Ultra 32.",
-           {{"game", "Game"}, {"high", "High"}, {"ultra", "Ultra"}}, 0);
-    toggle(kTabDetail, "Models", "detail.particles", "More particles",
-           "Keeps distant spray, smoke and dust and allows 1.5 times as many particles.", false);
+    choice(kTabDetail, "Models", "detail.shadows", "Shadows",
+           "Low: small objects stop casting shadows as early as on PS4, and the nearest shadows get 8 samples instead "
+           "of 32 (rougher edges up close). High, Ultra: smoother edges further than 4 m (16 or 32 samples instead of 8).",
+           {{"low", "Low"}, {"game", "Game"}, {"high", "High"}, {"ultra", "Ultra"}}, 1);
+    choice(kTabDetail, "Models", "detail.particles", "Particles",
+           "Spray, smoke and dust. Low: half as many. More: keeps the distant ones and allows 1.5 times as many.",
+           {{"low", "Low"}, {"0", "Game"}, {"1", "More"}}, 1);
     toggle(kTabDetail, "Models", "detail.dynamic_res", "Dynamic resolution",
            "On (as on PS4), the game lowers the resolution for a moment when a frame takes too long.", true);
     toggle(kTabDetail, "Camera effects", "detail.motion_blur", "Motion blur",

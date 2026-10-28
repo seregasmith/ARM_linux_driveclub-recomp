@@ -2,7 +2,9 @@
 
 #include "fileio.h"
 
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -22,16 +24,21 @@
 
 namespace {
 
-constexpr const char* kVersion = "graphics-2";
+constexpr const char* kVersion = "graphics-3";
 
 using fileio::MakeDirs;
 using fileio::ReadText;
 using fileio::Widen;
 bool WriteFile(const std::filesystem::path& path, const void* data, size_t size) { return fileio::WriteAll(path, data, size); }
 
+// op '=': the value (added when missing). Relative to the game's own value, for the Low levels: '+' adds, '*'
+// multiplies (a missing attribute counts as `base`; with no base it is left out), 'm' lowers it to at most the value
+// (only where the file has it).
 struct Attr {
   const char* name;
   const char* value;
+  char op = '=';
+  double base = NAN;
 };
 
 // One change: in configuration `conf`, the element `element` (or, with `tag`, the <Settings> of the
@@ -39,41 +46,76 @@ struct Attr {
 // (for example split="3"), only the element that holds that text is changed, and it must exist.
 // A configuration with a parent may only name a <SolQualityTag> that its parent chain has: the game writes through a
 // null pointer for any other.
+// `optional` (the Low levels): a configuration, tag or element this archive does not have is left out (and noted in
+// changes.txt) instead of failing the build; nothing new is added for it.
 struct Edit {
   const char* conf;
   const char* element;
   const char* tag;
   std::vector<Attr> attrs;
   const char* match = nullptr;
+  bool optional = false;
 };
 
-// Sets the attributes of one element "<Name ... />".
-std::string SetAttrs(std::string elem, const std::vector<Attr>& attrs) {
+using Log = std::vector<std::string>;
+
+std::string Number(double v) {
+  char s[32];
+  snprintf(s, sizeof s, "%g", v);
+  return s;
+}
+
+// Sets the attributes of one element "<Name ... />". `where` names it in the log.
+std::string SetAttrs(std::string elem, const std::vector<Attr>& attrs, const std::string& where, Log& log) {
   for (const Attr& a : attrs) {
     const std::string key = std::string(" ") + a.name + "=\"";
     const size_t at = elem.find(key);
-    if (at != std::string::npos) {
-      const size_t from = at + key.size(), to = elem.find('"', from);
-      elem.replace(from, to - from, a.value);
+    const bool has = at != std::string::npos;
+    const size_t from = has ? at + key.size() : 0, to = has ? elem.find('"', from) : 0;
+    const std::string old = has ? elem.substr(from, to - from) : "";
+    std::string value = a.value;
+    if (a.op == 'm') {
+      if (!has || std::atof(old.c_str()) <= std::atof(a.value)) {
+        log.push_back(where + " " + a.name + ": " + (has ? old + " kept" : "not in this file, left out"));
+        continue;
+      }
+    } else if (a.op == '+' || a.op == '*') {
+      const double now = has ? std::atof(old.c_str()) : a.base;
+      if (std::isnan(now)) {
+        log.push_back(where + " " + a.name + ": not in this file, left out");
+        continue;
+      }
+      const double v = std::atof(a.value);
+      value = Number(a.op == '+' ? now + v : now * v);
+    }
+    log.push_back(where + " " + a.name + ": " + (has ? old : "(none)") + " -> " + value);
+    if (has) {
+      elem.replace(from, to - from, value);
     } else {
       size_t end = elem.rfind("/>");
       while (end > 0 && (elem[end - 1] == ' ' || elem[end - 1] == '\t' || elem[end - 1] == '\r' || elem[end - 1] == '\n')) --end;
-      elem.replace(end, elem.size() - end, std::string(" ") + a.name + "=\"" + a.value + "\" />");
+      elem.replace(end, elem.size() - end, std::string(" ") + a.name + "=\"" + value + "\" />");
     }
   }
   return elem;
 }
 
-std::string NewElement(const char* name, const std::vector<Attr>& attrs) {
-  std::string s = std::string("<") + name;
-  for (const Attr& a : attrs) s += std::string(" ") + a.name + "=\"" + a.value + "\"";
-  return s + " />\n";
+std::string NewElement(const char* name, const std::vector<Attr>& attrs, const std::string& where, Log& log) {
+  // The attributes as SetAttrs would add them (relative ones from their base).
+  return SetAttrs(std::string("<") + name + " />", attrs, where, log) + "\n";
 }
 
-bool ApplyEdit(std::string& xml, const Edit& e) {
+bool ApplyEdit(std::string& xml, const Edit& e, Log& log) {
+  const std::string where = std::string(e.conf) + " " + (e.tag ? std::string(e.tag) : std::string(e.element)) +
+                            (e.match ? std::string(" ") + e.match : std::string());
+  const auto missing = [&](const char* what) {
+    if (!e.optional) return false;
+    log.push_back(where + ": " + what + " not in this file, left out");
+    return true;
+  };
   const std::string open = std::string("<Configuration name=\"") + e.conf + "\"";
   const size_t cs = xml.find(open);
-  if (cs == std::string::npos) return false;
+  if (cs == std::string::npos) return missing("configuration");
   const size_t ce = xml.find("</Configuration>", cs);
   if (ce == std::string::npos) return false;
   std::string block = xml.substr(cs, ce - cs);  // without the closing tag
@@ -81,13 +123,14 @@ bool ApplyEdit(std::string& xml, const Edit& e) {
     const std::string tag_open = std::string("<SolQualityTag name=\"") + e.tag + "\">";
     const size_t ts = block.find(tag_open);
     if (ts == std::string::npos) {
-      block += "<SolQualityTag name=\"" + std::string(e.tag) + "\">" + NewElement("Settings", e.attrs) + "</SolQualityTag>\n";
+      if (e.optional) return missing("quality tag");
+      block += "<SolQualityTag name=\"" + std::string(e.tag) + "\">" + NewElement("Settings", e.attrs, where, log) + "</SolQualityTag>\n";
     } else {
       const size_t te = block.find("</SolQualityTag>", ts);
       const size_t ss = block.find("<Settings", ts);
       const size_t se = ss == std::string::npos ? ss : block.find("/>", ss);
       if (te == std::string::npos || ss == std::string::npos || se == std::string::npos || se > te) return false;
-      block.replace(ss, se + 2 - ss, SetAttrs(block.substr(ss, se + 2 - ss), e.attrs));
+      block.replace(ss, se + 2 - ss, SetAttrs(block.substr(ss, se + 2 - ss), e.attrs, where, log));
     }
   } else {
     // "<Shadows " is not "<ShadowSplit": the name must end at a space.
@@ -102,12 +145,13 @@ bool ApplyEdit(std::string& xml, const Edit& e) {
       break;
     }
     if (es == std::string::npos) {
+      if (e.optional) return missing("element");
       if (e.match) return false;
-      block += NewElement(e.element, e.attrs);
+      block += NewElement(e.element, e.attrs, where, log);
     } else {
       const size_t ee = block.find("/>", es);
       if (ee == std::string::npos) return false;
-      block.replace(es, ee + 2 - es, SetAttrs(block.substr(es, ee + 2 - es), e.attrs));
+      block.replace(es, ee + 2 - es, SetAttrs(block.substr(es, ee + 2 - es), e.attrs, where, log));
     }
   }
   xml.replace(cs, ce - cs, block);
@@ -170,6 +214,9 @@ std::string ReplaceDocument(std::vector<uint8_t>& pack, const std::string& root,
 
 // The values: between the race camera's and photo mode's; the developers' own pre/post-race camera values for the
 // scenery (their comment: "relaxed cull thresholds so we see less popping"). Tested on an RTX 3070 Laptop.
+// Low (-1) goes the other way from the game's own values (relative edits: the archive's values are not known here),
+// only where the file has them; run.sh adds the PS4's cull limits (BB_CULL_SCALE, BB_CULL_SCALE_SHADOW) for Low
+// scenery and shadows.
 std::vector<Edit> Edits(const GraphicsChoice& c) {
   std::vector<Edit> e;
   if (c.own_car) {
@@ -177,8 +224,16 @@ std::vector<Edit> Edits(const GraphicsChoice& c) {
     e.push_back({"default", nullptr, "viewed_vehicle", {{"minimumLod", "0"}, {"cullThreshold", "0.0"}}});
     e.push_back({"default", "CabCharacter", nullptr, {{"lodBias", "0.0"}}});
   }
-  if (c.opponents) {
+  if (c.opponents == 1) {
     e.push_back({"default", nullptr, "unviewed_vehicle", {{"lodBias", "-0.8"}, {"minimumLod", "-1"}, {"cullThreshold", "0.0"}}});
+  } else if (c.opponents < 0) {
+    // One detail step coarser at every distance (a LOD bias without a value in the file is 0).
+    e.push_back({"default", nullptr, "unviewed_vehicle", {{"lodBias", "1", '+', 0.0}}, nullptr, true});
+  }
+  if (c.scenery < 0) {
+    // Simpler models sooner for the roadside objects; the ground (road and terrain) keeps the game's.
+    for (const char* tag : {"static_objects", "dynamic_objects", "transient"})
+      e.push_back({"default", nullptr, tag, {{"lodBias", "1", '+', 0.0}}, nullptr, true});
   }
   if (c.scenery == 1) {
     e.push_back({"default", nullptr, "static_objects", {{"lodBias", "-2.5"}, {"cullThreshold", "0.005"}, {"shadowCullThreshold", "0.005"}}});
@@ -200,16 +255,23 @@ std::vector<Edit> Edits(const GraphicsChoice& c) {
   }
   // Shadows: the race views filter the nearest of the four shadow cascades (4 m) with 32 samples and the others
   // (to 11, 42 and 256 m) with the engine's 8. Set in "default", every race view without its own value follows.
-  if (c.shadows) {
+  if (c.shadows > 0) {
     const char* n = c.shadows == 1 ? "16" : "32";
     for (const char* split : {"split=\"1\"", "split=\"2\"", "split=\"3\""})
       e.push_back({"default", "ShadowSplit", nullptr, {{"numLookups", n}}, split});
+  } else if (c.shadows < 0) {
+    // The nearest cascade with the engine's 8 samples like the others, in the race views that set more.
+    for (const char* conf : {"default", "OnePlayer2D", "OnePlayer2DInCar"})
+      e.push_back({conf, "ShadowSplit", nullptr, {{"numLookups", "8", 'm'}}, "split=\"0\"", true});
   }
-  if (c.particles) {
+  if (c.particles == 1) {
     // Race views drop distant particles (spray, smoke, dust); the replay camera keeps them.
     e.push_back({"OnePlayer2D", "Particles", nullptr, {{"killDistantParticles", "false"}}});
     e.push_back({"OnePlayer2DInCar", "Particles", nullptr, {{"killDistantParticles", "false"}}});
     e.push_back({"default", "ScreenRush", nullptr, {{"ParticleLimitScalar", "1.5"}}});
+  } else if (c.particles < 0) {
+    // Half the game's particle limit (a missing scalar is 1).
+    e.push_back({"default", "ScreenRush", nullptr, {{"ParticleLimitScalar", "0.5", '*', 1.0}}});
   }
   if (!c.motion_blur) {
     e.push_back({"default", "General", nullptr, {{"enableMotionBlur", "false"}}});
@@ -239,9 +301,12 @@ std::wstring BuildGraphics(const std::filesystem::path& update_dir, const std::f
                            const std::filesystem::path& out_dir, const GraphicsChoice& choice, bool& active) {
   active = false;
   const std::filesystem::path pack_path = out_dir / "global.rpk", stamp_path = out_dir / "stamp.txt";
+  const std::filesystem::path changes_path = out_dir / "changes.txt", original_path = out_dir / "viewportquality.xml.orig";
   if (choice.Default()) {
     fileio::Remove(pack_path);
     fileio::Remove(stamp_path);
+    fileio::Remove(changes_path);
+    fileio::Remove(original_path);
     return L"";
   }
   char stamp[256];
@@ -258,14 +323,17 @@ std::wstring BuildGraphics(const std::filesystem::path& update_dir, const std::f
   std::string err = DatxExtract(update_dir, base_dir, "global.rpk", pack);
   if (!err.empty()) return Widen("global.rpk: " + err);
   const std::vector<Edit> edits = Edits(choice);
+  Log log;
+  std::string original;
   err = ReplaceDocument(pack, "ViewportQuality", [&](std::string& xml) {
+    original = xml;
     for (const Edit& e : edits) {
-      if (!ApplyEdit(xml, e)) return false;
+      if (!ApplyEdit(xml, e, log)) return false;
     }
     return true;
   });
   if (!err.empty()) return Widen(err);
-  if (choice.opponents) {
+  if (choice.opponents == 1) {
     // Every part of every car (body, technical, interior, wheels, other) one detail step closer.
     err = ReplaceDocument(pack, "lodgroupdata", [](std::string& xml) {
       size_t n = 0;
@@ -279,6 +347,12 @@ std::wstring BuildGraphics(const std::filesystem::path& update_dir, const std::f
     fileio::Remove(pack_path);
     return L"the graphics file could not be written";
   }
+  // For checking what changed (not read by the game).
+  std::string report = std::string("# viewportquality.xml in global.rpk: ") + Describe(choice) + "\n";
+  for (const std::string& line : log) report += line + "\n";
+  if (choice.opponents == 1) report += "vehiclelodgroupdata every car part lodBias: 0 -> -1\n";
+  WriteFile(changes_path, report.data(), report.size());
+  WriteFile(original_path, original.data(), original.size());
   active = true;
   return L"";
 }

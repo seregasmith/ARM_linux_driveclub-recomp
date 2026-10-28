@@ -144,11 +144,11 @@ folder of replacement game files built from the player's own archive and served 
 | row | values | reaches the game |
 |---|---|---|
 | Your car: full detail | on, off | mods (an edited `global.rpk`) |
-| Other cars: full detail | on, off | mods |
-| Scenery detail (less pop-in) | Game, High, Ultra | mods |
+| Other cars | Low, Game, Full detail | mods |
+| Scenery detail | Low, Game, High, Ultra | mods; Low also `BB_CULL_SCALE=1` |
 | High-quality reflections | on, off | mods |
-| Shadow edges | Game, High, Ultra | mods |
-| More particles | on, off | mods |
+| Shadows | Low, Game, High, Ultra | mods; Low also `BB_CULL_SCALE_SHADOW=1` |
+| Particles | Low, Game, More | mods |
 | Dynamic resolution | on, off | mods |
 | Motion blur | on, off (locked on with FSR 3.1) | mods |
 | Lens dust | on, off | mods |
@@ -230,9 +230,10 @@ non-Steam program cannot open it reliably.
 | `render` | `720p`, `768p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `8k` |
 | `dlc_unlock` | `0`, `1` |
 | `fast_car_switch` | `0`, `1` |
-| `detail.own_car`, `detail.opponents`, `detail.reflections`, `detail.particles` | `0`, `1` |
+| `detail.own_car`, `detail.reflections` | `0`, `1` |
+| `detail.opponents`, `detail.particles` | `low`, `0`, `1` |
 | `detail.dynamic_res`, `detail.motion_blur`, `detail.lens_dust`, `detail.heat_haze`, `detail.fxaa` | `1`, `0` |
-| `detail.scenery`, `detail.shadows` | `game`, `high`, `ultra` |
+| `detail.scenery`, `detail.shadows` | `low`, `game`, `high`, `ultra` |
 | `gearbox` | `game`, `automatic`, `manual` |
 | `brake_assist` | `game`, `off`, `low`, `medium`, `high` |
 | `hardcore`, `wheel_assist` | `game`, `off`, `on` |
@@ -295,6 +296,8 @@ find.
 - `packaging/default.nix`, `appimage.sh`: ship `dc-launcher`; the package check also renders every tab off-screen
   (`dc-launcher --selftest`, SDL's offscreen video driver).
 - `docs/ARM64_LINUX.md`: the launcher replaces "no launcher window" in Running.
+- Added after version 1: Low levels on the Detail tab (other cars, scenery, shadows, particles; ARM64_LINUX.md,
+  "Tuning"), relative to the archive's own values; `graphics/changes.txt` lists what was changed.
 - Added after version 1: Lossless Scaling frame generation (lsfg-vk, a layer installed on the system) on the
   Graphics tab; `run.sh --lsfg-status` finds lsfg-vk and `Lossless.dll` for the launcher's check and the game's start.
 

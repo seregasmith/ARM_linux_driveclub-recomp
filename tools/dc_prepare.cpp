@@ -12,8 +12,9 @@
 //
 // Replacement game files built from the dumps, as the Windows launcher builds them (launcher/unlock.cpp,
 // carswitch.cpp, graphics.cpp): --unlock (the add-on content, <work>/unlock), --car-switch (faster car select,
-// <work>/carswitch), --detail (graphics detail, <work>/graphics; KEY: own_car, opponents, reflections, particles,
-// dynamic_res, motion_blur, lens_dust, heat_haze, fxaa = 0|1, scenery, shadows = game|high|ultra). Each is rebuilt only
+// <work>/carswitch), --detail (graphics detail, <work>/graphics; KEY: own_car, reflections, dynamic_res, motion_blur,
+// lens_dust, heat_haze, fxaa = 0|1; opponents, particles = low|0|1; scenery, shadows = low|game|high|ultra; changes.txt
+// there lists what was changed). Each is rebuilt only
 // when the dumps or the choices changed. <work>/prep/mods.txt lists the folders the runtime is to serve (--mods); one
 // that cannot be built is left out with a warning, and the game starts without it.
 #include "../launcher/prepare.cpp"
@@ -77,11 +78,12 @@ int main(int argc, char** argv) {
             const size_t eq = kv.find('=');
             const std::string k = kv.substr(0, eq), v = eq == std::string::npos ? "" : kv.substr(eq + 1);
             const bool on = v == "1" || v == "on" || v == "true";
-            const int level = v == "high" || v == "1" ? 1 : v == "ultra" || v == "2" ? 2 : 0;
+            const bool low = v == "low" || v == "-1";
+            const int level = low ? -1 : v == "high" || v == "1" ? 1 : v == "ultra" || v == "2" ? 2 : 0;
             if (k == "own_car") detail.own_car = on;
-            else if (k == "opponents") detail.opponents = on;
+            else if (k == "opponents") detail.opponents = low ? -1 : on;
             else if (k == "reflections") detail.reflections = on;
-            else if (k == "particles") detail.particles = on;
+            else if (k == "particles") detail.particles = low ? -1 : on;
             else if (k == "dynamic_res") detail.dynamic_res = on;
             else if (k == "motion_blur") detail.motion_blur = on;
             else if (k == "lens_dust") detail.lens_dust = on;

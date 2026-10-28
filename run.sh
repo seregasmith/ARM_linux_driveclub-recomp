@@ -41,8 +41,9 @@
 #   language=                      the PS4 system language id (1 English, 2 French, 4 German, 8 Russian, ...)
 #   dlc_unlock=0                   1: the add-on cars, bikes, tours and liveries, built from your own dumps
 #   fast_car_switch=0              1: shorter car select animations, built from your own dumps
-#   detail.KEY=VALUE               graphics detail (own_car, opponents, reflections, particles: 0|1; dynamic_res,
-#                                  motion_blur, lens_dust, heat_haze, fxaa: 1|0; scenery, shadows: game|high|ultra)
+#   detail.KEY=VALUE               graphics detail (own_car, reflections: 0|1; opponents, particles: low|0|1;
+#                                  dynamic_res, motion_blur, lens_dust, heat_haze, fxaa: 1|0; scenery, shadows:
+#                                  low|game|high|ultra)
 #   gearbox=game                   game | automatic | manual
 #   brake_assist=game              game | off | low | medium | high
 #   hardcore=game                  game | off | on (hardcore handling)
@@ -398,6 +399,10 @@ for pair in gearbox:BB_GEARBOX brake_assist:BB_BRAKE_ASSIST hardcore:BB_HARDCORE
     [[ $value == game ]] || setdefault "${pair#*:}" "$value"
 done
 for key in "${!cfg_env[@]}"; do setdefault "$key" "${cfg_env[$key]}"; done
+# Low scenery and shadows: the PS4's limits for how small an object may get before it is left out (and stops casting a
+# shadow) instead of the runtime's quarter of them (src/probe.c, BB_CULL_SCALE): fewer draws, more pop-in.
+[[ ${cfg[detail.scenery]:-game} == low ]] && setdefault BB_CULL_SCALE 1
+[[ ${cfg[detail.shadows]:-game} == low ]] && setdefault BB_CULL_SCALE_SHADOW 1
 # Lossless Scaling frame generation (lsfg=1): lsfg-vk's environment configuration, for this game only (its own
 # conf.toml and profiles stay as they are), and only its layer let through the filter below.
 lsfg_on=0
