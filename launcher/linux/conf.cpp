@@ -9,7 +9,8 @@ namespace fs = std::filesystem;
 namespace {
 // The order run.sh writes the keys in; others follow in the order they came.
 const char* const kOrder[] = {"update", "base", "preset", "output", "render", "fps", "fps_cap", "fullscreen", "aa",
-                              "upscale", "sharpness", "mirror", "aniso", "two_thread", "show_fps", "mangohud", "name",
+                              "upscale", "sharpness", "mirror", "aniso", "two_thread", "lsfg", "lsfg_multiplier",
+                              "lsfg_flow_scale", "lsfg_performance", "show_fps", "mangohud", "name",
                               "language", "dlc_unlock", "fast_car_switch", "gearbox", "brake_assist", "hardcore",
                               "wheel_assist", "overlays", "patches_on", "patches_off"};
 } // namespace

@@ -270,6 +270,11 @@ struct App {
         const int u = model.Find("update"), b = model.Find("base");
         folders = ::CheckFolders(model.rows[u].text, model.rows[b].text);
     }
+    // Lossless Scaling frame generation: run.sh --lsfg-status finds lsfg-vk and Lossless.dll as the game's start does.
+    // Its first line says what is missing (or "Ready: ..."); the rest is what it found and where it looked.
+    std::vector<std::string> lsfg_lines;
+    bool lsfg_ready = false;
+    void CheckLsfg();
     void Push(Layer* layer) { layers.emplace_back(layer); }
     void Command(const std::string& id);
     void Play();
@@ -1060,6 +1065,10 @@ std::string MainLayer::Help(ImU32& color) {
         color = kWarn;
         return locked + "  " + r.hint;
     }
+    if (r.id == "lsfg" && r.sel == 1 && !app.lsfg_ready && !app.lsfg_lines.empty()) {
+        color = kWarn;
+        return app.lsfg_lines[0] + " Until then the game starts without it.";
+    }
     if (r.kind == Kind::Folder) {
         const std::string& problem = r.id == "update" ? app.folders.update_problem : app.folders.base_problem;
         if (!problem.empty()) {
@@ -1269,6 +1278,12 @@ void MainLayer::Draw(bool top) {
             if (r.id == "@patches") {
                 const int n = m.ChangedPatches();
                 extra = n ? std::to_string(n) + " changed" : "as in DriveClub.xml";
+            } else if (r.id == "@lsfg_check") {
+                extra = app.lsfg_lines.empty() ? "" : app.lsfg_ready ? "ready" : "not ready";
+                if (!extra.empty()) {
+                    TextRight(24, ImVec2(vr - 34 * S, mid), app.lsfg_ready ? kOk : kWarn, extra);
+                    extra.clear();
+                }
             } else if (r.id == "@env") {
                 int n = 0;
                 for (const auto& [k, v] : app.conf.Items()) n += k.rfind("env.", 0) == 0 && m.Find(k) < 0;
@@ -1302,6 +1317,21 @@ void MainLayer::Draw(bool top) {
 // ---- app commands ------------------------------------------------------------------------------------------------
 void App::OpenFolders(int target, bool search) { Push(new FolderLayer(*this, target, search)); }
 
+void App::CheckLsfg() {
+    lsfg_lines.clear();
+    lsfg_ready = false;
+    if (run_sh.empty()) return;
+    // Saved first: run.sh reads the settings file (the environment variables of the Advanced tab among them).
+    if (dirty) Save();
+    Proc proc;
+    if (!proc.Start({"bash", run_sh.string(), "--lsfg-status"})) return;
+    const Uint64 until = SDL_GetTicks() + 5000; // a few folders and files: well below a second
+    while (proc.Poll() && SDL_GetTicks() < until) SDL_Delay(5);
+    lsfg_lines = proc.lines;
+    lsfg_ready = proc.exit_code == 0 && !lsfg_lines.empty() && lsfg_lines[0].rfind("Ready", 0) == 0;
+    if (lsfg_lines.empty()) lsfg_lines.push_back("run.sh could not check for lsfg-vk (exit code " + std::to_string(proc.exit_code) + ").");
+}
+
 void App::Command(const std::string& id) {
     if (id == "@play") Play();
     else if (id == "@quit") quit = true;
@@ -1311,6 +1341,10 @@ void App::Command(const std::string& id) {
         focus[kPagePatches] = 0;
         scroll[kPagePatches] = 0;
     } else if (id == "@env") Push(new EnvLayer(*this));
+    else if (id == "@lsfg_check") {
+        CheckLsfg();
+        Push(new TextLayer("Lossless Scaling frame generation", lsfg_lines));
+    }
     else if (id == "@cpu_selftest") Push(TextLayer::Running("CPU self-test", {(bin / "dc-cpu-selftest").string()}));
     else if (id == "@vulkan_info") {
         const char* vi = std::getenv("BB_VULKANINFO");
@@ -1524,6 +1558,8 @@ int Run(int argc, char** argv) {
         app.data = d && *d ? fs::path(d) : fs::path(home ? home : ".") / ".local/share/driveclub-recomp";
     }
     app.conf_path = app.data / "driveclub.conf";
+    // run.sh (Play, the lsfg-vk check) reads the same settings file.
+    setenv("DC_DATA_DIR", app.data.c_str(), 1);
     if (!app.conf.Load(app.conf_path)) std::fprintf(stderr, "dc-launcher: cannot read %s\n", app.conf_path.c_str());
 
     SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0"); // the launcher has its own; Steam's would cover it
@@ -1555,6 +1591,7 @@ int Run(int argc, char** argv) {
     app.model.Build(ReadPatches(app.patch_xml), display_hz);
     app.model.Load(app.conf);
     app.CheckFolders();
+    app.CheckLsfg();
     auto* main_layer = new MainLayer(app);
     app.layers.emplace_back(main_layer);
     // First start (or the folders are gone): look for them.

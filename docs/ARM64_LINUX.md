@@ -99,6 +99,7 @@ zenity/kdialog folder pickers when the folders are missing and there is a deskto
 | `--config` | print the settings file's path and contents |
 | `--list-patches` | the community patches (names for `patches_on`/`patches_off`) and their defaults |
 | `--cpu-selftest` | check the guest CPU (FEXCore) without the game, then its speed |
+| `--lsfg-status` | whether Lossless Scaling frame generation can run: lsfg-vk and Lossless.dll (below) |
 | `--vulkan-info` | the Vulkan driver the game will use |
 | `--help` | all options and settings |
 
@@ -118,6 +119,7 @@ Everything lives in `~/.local/share/driveclub-recomp/` (`$XDG_DATA_HOME/driveclu
 | `user/shader/` | the shader cache |
 | `user/patches_enabled.txt` | the community patches in use (written at each start from the settings) |
 | `mods/` | loose-file mods: files here replace the game's own files of the same path |
+| `lsfg/implicit_layer.d/` | with `lsfg=1`: lsfg-vk's layer manifest, copied with its library's full path (below) |
 
 ### Settings (`driveclub.conf`)
 
@@ -148,6 +150,10 @@ grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'l
 | `show_fps` | `0` | `1`: the FPS counter |
 | `mangohud` | `0` | `1`: the MangoHud overlay (bundled) |
 | `two_thread` | `1` | `0`: switch off the two-thread draw path |
+| `lsfg` | `0` | `1`: Lossless Scaling frame generation (lsfg-vk, below) |
+| `lsfg_multiplier` | `2` | `2`, `3`, `4`: frames shown for each frame the game draws |
+| `lsfg_flow_scale` | `100` | `25`..`100` (%): the resolution motion is estimated at |
+| `lsfg_performance` | `0` | `1`: lsfg's lighter model |
 | `name` | `Player` | the player name |
 | `language` | `1` | the console language (below) |
 | `dlc_unlock` | `0` | `1`: the add-on cars, bikes, tours and livery decals, built from your own dumps |
@@ -175,6 +181,40 @@ Variables already set in the environment (`BB_*`, `DC_*`) win over the file.
 | 4 | German | 11 | Chinese (Simplified) | 18 | English (UK) |
 | 5 | Italian | 12 | Finnish | 19 | Turkish |
 | 6 | Dutch | 13 | Swedish | 20 | Spanish (Mexico) |
+
+### Frame generation (Lossless Scaling)
+
+Graphics → Frame generation switches on [lsfg-vk](https://lsfg-vk.dev), Lossless Scaling's frame generation for
+Linux: a Vulkan layer that shows generated frames between the game's own, for smoother motion at a little more
+input lag. It is not bundled in the AppImage; it needs two things installed on the device:
+
+1. **lsfg-vk 2** built for ARM64 (the system's packages or lsfg-vk.dev). An x86-64 build, such as the Steam Deck's
+   Decky plugin, cannot load into the game; the check says so. lsfg-vk 1.x works too.
+2. **Lossless Scaling**, owned on Steam and installed in any Steam library (the SD card too): lsfg-vk uses the
+   shaders in its `Lossless.dll`. Steam may only offer to install it (a Windows program) after a Proton version is
+   forced in its Properties → Compatibility.
+
+Then switch on "Lossless Scaling frame generation". "Check lsfg-vk and Lossless Scaling" (the row below it, also
+`--lsfg-status` in a terminal) shows the layer, its library and `Lossless.dll` it found, or what is missing and
+where it looked. With something missing the game starts without frame generation, and the log says why
+(`frame generation stays off: ...`).
+
+For the game only, `run.sh` then:
+
+- uses lsfg-vk's environment configuration (`LSFGVK_ENV=1`, `LSFGVK_MULTIPLIER`, `LSFGVK_FLOW_SCALE`,
+  `LSFGVK_PERFORMANCE_MODE`, `LSFGVK_DLL_PATH`; for 1.x `LSFG_LEGACY=1` and the `LSFG_` names), so your own
+  `~/.config/lsfg-vk/conf.toml` and its profiles are neither used nor changed;
+- finds `Lossless.dll` in every Steam library (`libraryfolders.vdf`); lsfg-vk itself looks only in the default one.
+  `env.LSFGVK_DLL_PATH` (Advanced → Environment variables) points it somewhere else;
+- copies the layer manifest to `lsfg/implicit_layer.d/` with its library's full path and adds that folder first
+  (`VK_ADD_IMPLICIT_LAYER_PATH`): the AppImage's programs use its own libraries, which do not look in `/usr/lib`,
+  so a manifest naming `liblsfg-vk-layer.so` without a path would not load. Only this layer is let through the
+  filter that keeps other installed layers out (`VK_LOADER_LAYERS_ALLOW`).
+
+lsfg-vk presents with vsync (FIFO), so the game's frame rate times the multiplier should equal the screen's
+refresh rate. On the Odin 3's 120 Hz screen: Frame rate 60 with 2x, or 30 with 4x. If Steam's Performance menu
+runs the screen at a lower rate, choose for that rate; above it the game itself slows down. Flow scale 70–80 % and
+Performance mode make it cheaper on the GPU, which it shares with the game.
 
 ### Checks
 
@@ -232,5 +272,6 @@ The first full build with `build_docker.sh` (Apple Silicon, FEX main of 2026-10-
 package check passed, `dc-cpu-selftest` passes with FEXCore in an ARM64 Linux VM, and on an Odin 3 (Armada OS) the
 AppImage starts the game. The launcher was tested off-screen (every page and dialog drawn, a scripted walk through
 the menus, its settings checked against `run.sh`), not yet on the Odin 3 with Steam Input. Frame rate and rendering
-on the Odin 3 are still to be measured. Report problems with the log file and, for a crash, the lines starting with
-`Guest fault`, `Host fault` or `STOP:`.
+on the Odin 3 are still to be measured. Lossless Scaling frame generation (lsfg-vk) was checked against stand-in
+installs (layer and Steam library search, the environment the game gets), not yet with lsfg-vk on the Odin 3.
+Report problems with the log file and, for a crash, the lines starting with `Guest fault`, `Host fault` or `STOP:`.

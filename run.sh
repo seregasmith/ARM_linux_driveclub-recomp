@@ -11,6 +11,7 @@
 #   bash run.sh --config                 print the settings file's path and contents
 #   bash run.sh --list-patches           the community patches and their defaults
 #   bash run.sh --cpu-selftest           check the guest CPU (FEXCore on ARM64) without the game, and its speed
+#   bash run.sh --lsfg-status            whether Lossless Scaling frame generation can run: lsfg-vk, Lossless.dll
 # Other options go to the runtime (and start the game). DC_NO_LAUNCHER=1: never the launcher.
 #
 # Settings: $DC_DATA_DIR/driveclub.conf (default ~/.local/share/driveclub-recomp), key=value lines (the launcher
@@ -31,6 +32,11 @@
 #   show_fps=0                     1: the FPS counter
 #   mangohud=0                     1: the MangoHud overlay (bundled in the AppImage)
 #   two_thread=1                   the two-thread draw path (0 off)
+#   lsfg=0                         1: Lossless Scaling frame generation (lsfg-vk, installed on the system; Lossless
+#                                  Scaling owned and installed in Steam). bash run.sh --lsfg-status: what is found
+#   lsfg_multiplier=2              2 | 3 | 4: frames shown per game frame
+#   lsfg_flow_scale=100            25..100 (%): the resolution motion is estimated at
+#   lsfg_performance=0             1: lsfg's lighter model
 #   name=Player                    the player name
 #   language=                      the PS4 system language id (1 English, 2 French, 4 German, 8 Russian, ...)
 #   dlc_unlock=0                   1: the add-on cars, bikes, tours and liveries, built from your own dumps
@@ -98,6 +104,148 @@ pick_folder() { # title -> path on stdout, empty when there is no picker or it w
     fi
 }
 
+# ---- Lossless Scaling frame generation (lsfg-vk) -----------------------------------------------------------------
+# lsfg-vk (lsfg-vk.dev) is a Vulkan layer installed on the system; it draws the generated frames with the shaders in
+# Lossless Scaling's Lossless.dll (a Steam purchase). lsfg_find looks for both the way the game's start needs them:
+# - the layer manifest in the Vulkan loader's implicit layer folders (lsfg-vk 2: VK_LAYER_LSFGVK_frame_generation,
+#   1.x: VK_LAYER_LS_frame_generation). The packaged runtime's libraries look in other places than the system's,
+#   so a manifest naming its library without a full path ("liblsfg-vk-layer.so") is copied with the full path;
+# - Lossless.dll in every Steam library (libraryfolders.vdf: the SD card too). lsfg-vk itself only looks in the
+#   default library, so its path is passed on.
+lsfg_name='' lsfg_manifest='' lsfg_lib='' lsfg_dll='' lsfg_problem=''
+lsfg_looked=() lsfg_libraries=()
+json_string() { # KEY FILE: the first "KEY": "value" in a JSON file
+    awk -v key="\"$1\"" '{
+        i = index($0, key); if (!i) next
+        s = substr($0, i + length(key))
+        if (match(s, /^[ \t]*:[ \t]*"[^"]*"/)) {
+            s = substr(s, RSTART, RLENGTH); sub(/^[ \t]*:[ \t]*"/, "", s); sub(/"$/, "", s); print s; exit
+        }
+    }' "$2" 2>/dev/null
+}
+lsfg_find() {
+    local d f name lib more=() dirs=() want machine steam real seen=' '
+    lsfg_name='' lsfg_manifest='' lsfg_lib='' lsfg_dll='' lsfg_problem='' lsfg_looked=() lsfg_libraries=()
+    # The loader's order (and the AppImage may have replaced XDG_DATA_DIRS: the system's folders always).
+    IFS=: read -r -a more <<< "${XDG_CONFIG_DIRS:-/etc/xdg}"
+    dirs=("${XDG_CONFIG_HOME:-$HOME/.config}" "${more[@]}" /etc "${XDG_DATA_HOME:-$HOME/.local/share}")
+    IFS=: read -r -a more <<< "${XDG_DATA_DIRS:-}"
+    dirs+=("${more[@]}" /usr/local/share /usr/share)
+    for d in "${dirs[@]}"; do
+        d=${d%/}/vulkan/implicit_layer.d
+        [[ -d $d && $seen != *" $d "* ]] || continue
+        seen+="$d "
+        lsfg_looked+=("$d")
+        for f in "$d"/*.json; do
+            [[ -f $f ]] || continue
+            name=$(json_string name "$f")
+            # The first lsfg-vk 2 layer, else the first 1.x one (the loader keeps the first of a name).
+            if [[ $name == VK_LAYER_LSFGVK_frame_generation && $lsfg_name != "$name" ]] ||
+               [[ $name == VK_LAYER_LS_frame_generation && -z $lsfg_name ]]; then
+                lsfg_name=$name lsfg_manifest=$f
+            fi
+        done
+    done
+    if [[ -z $lsfg_name ]]; then
+        lsfg_problem="lsfg-vk is not installed: no Vulkan layer VK_LAYER_LSFGVK_frame_generation was found."
+        return 1
+    fi
+    lib=$(json_string library_path "$lsfg_manifest")
+    if [[ -z $lib ]]; then
+        lsfg_problem="lsfg-vk's layer manifest names no library ($lsfg_manifest)."
+        return 1
+    elif [[ $lib == */* && $lib != /* ]]; then
+        lib=$(dirname -- "$lsfg_manifest")/$lib # relative to the manifest
+    elif [[ $lib != /* ]]; then
+        for d in "$HOME/.local/lib" "$HOME/.local/lib64" /usr/local/lib /usr/local/lib64 "/usr/lib/$(uname -m)-linux-gnu" \
+                 /usr/lib /usr/lib64 /lib /lib64; do
+            [[ -f $d/$lib ]] && { lib=$d/$lib; break; }
+        done
+    fi
+    if [[ ! -f $lib ]]; then
+        lsfg_problem="lsfg-vk's library $lib was not found (layer manifest $lsfg_manifest)."
+        return 1
+    fi
+    lsfg_lib=$lib
+    # A layer for another processor (an x86-64 build on ARM64) cannot load into the game.
+    case $(uname -m) in aarch64|arm64) want=183 ;; x86_64) want=62 ;; *) want='' ;; esac
+    machine=$(od -An -t u2 -j 18 -N 2 -- "$lib" 2>/dev/null | tr -d ' \n') || machine=''
+    if [[ -n $want && -n $machine && $machine != "$want" ]]; then
+        case $machine in 62) machine=x86-64 ;; 183) machine=ARM64 ;; 40) machine=32-bit ARM ;; 3) machine=32-bit x86 ;; esac
+        lsfg_problem="lsfg-vk ($lib) is built for $machine: install its $(uname -m) build."
+        return 1
+    fi
+    # Lossless.dll: a path given (LSFGVK_DLL_PATH, also from the Advanced tab), else every Steam library.
+    lsfg_dll=${LSFGVK_DLL_PATH:-${cfg_env[LSFGVK_DLL_PATH]:-${LSFG_DLL_PATH:-${cfg_env[LSFG_DLL_PATH]:-}}}}
+    if [[ -n $lsfg_dll ]]; then
+        [[ -f $lsfg_dll ]] && return 0
+        lsfg_problem="Lossless.dll is not at $lsfg_dll (LSFGVK_DLL_PATH)."
+        lsfg_dll=''
+        return 1
+    fi
+    seen=' '
+    for steam in "${XDG_DATA_HOME:-$HOME/.local/share}/Steam" "$HOME/.local/share/Steam" "$HOME/.steam/steam" \
+                 "$HOME/.steam/root" "$HOME/.steam/debian-installation" "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam" \
+                 "$HOME/snap/steam/common/.local/share/Steam"; do
+        [[ -d $steam/steamapps ]] || continue
+        more=("$steam")
+        if [[ -f $steam/steamapps/libraryfolders.vdf ]]; then
+            while IFS= read -r d; do [[ -n $d ]] && more+=("${d//\\\\/\\}"); done < <(
+                sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$steam/steamapps/libraryfolders.vdf")
+        fi
+        for d in "${more[@]}"; do
+            real=$(cd -- "$d" 2>/dev/null && pwd -P) || continue
+            [[ $seen != *" $real "* ]] || continue
+            seen+="$real "
+            lsfg_libraries+=("$real")
+            f="$real/steamapps/common/Lossless Scaling/Lossless.dll"
+            [[ -z $lsfg_dll && -f $f ]] && lsfg_dll=$f
+        done
+    done
+    if [[ -z $lsfg_dll ]]; then
+        if (( ${#lsfg_libraries[@]} == 0 )); then
+            lsfg_problem="Lossless Scaling was not found: no Steam library here. Install Lossless Scaling in Steam."
+        else
+            lsfg_problem="Lossless Scaling was not found in your Steam libraries: install it in Steam (you need to own it)."
+        fi
+        return 1
+    fi
+    return 0
+}
+lsfg_report() { # run.sh --lsfg-status: the first line for the launcher, then the details
+    local status=0
+    if lsfg_find; then
+        echo "Ready: lsfg-vk $([[ $lsfg_name == VK_LAYER_LS_frame_generation ]] && echo 1.x || echo 2) and Lossless Scaling were found."
+    else
+        echo "$lsfg_problem"
+        status=1
+    fi
+    echo
+    [[ -n $lsfg_name ]] && echo "Layer: $lsfg_name" && echo "Manifest: $lsfg_manifest"
+    [[ -n $lsfg_lib ]] && echo "Library: $lsfg_lib"
+    [[ -n $lsfg_dll ]] && echo "Lossless.dll: $lsfg_dll"
+    echo "Layer folders searched:"
+    if (( ${#lsfg_looked[@]} )); then printf '  %s\n' "${lsfg_looked[@]}"; else echo "  (none of them exist)"; fi
+    if [[ -n $lsfg_lib ]]; then
+        echo "Steam libraries searched for Lossless Scaling:"
+        if (( ${#lsfg_libraries[@]} )); then printf '  %s\n' "${lsfg_libraries[@]}"; else echo "  (no Steam found)"; fi
+    fi
+    local on=off perf=off
+    [[ ${cfg[lsfg]:-0} == 1 ]] && on=on
+    [[ ${cfg[lsfg_performance]:-0} == 1 ]] && perf=on
+    echo "Settings: frame generation $on, ${cfg[lsfg_multiplier]:-2}x, flow scale ${cfg[lsfg_flow_scale]:-100}%," \
+         "performance mode $perf"
+    if [[ -z $lsfg_name ]]; then
+        echo
+        echo "Install lsfg-vk 2 built for this processor ($(uname -m)): lsfg-vk.dev, or your system's packages."
+    elif [[ -n $lsfg_lib && -z $lsfg_dll ]]; then
+        echo
+        echo "Install Lossless Scaling in Steam (any library). If Steam does not offer it on this system, turn on"
+        echo "Steam Play for it: its Properties, Compatibility, force a Proton version."
+    fi
+    return $status
+}
+
 setup=0 folders_given=0
 # mode: auto: the launcher when there is a desktop and nothing else was asked for; launcher; play; prepare
 args=()
@@ -109,6 +257,7 @@ while [[ $# -gt 0 ]]; do
     --config) echo "$conf"; [[ -f $conf ]] && cat "$conf"; exit 0 ;;
     --list-patches) exec "$prepare" --patches-xml "$patch_xml" --list ;;
     --cpu-selftest) shift; exec "$bin/dc-cpu-selftest" "$@" ;;
+    --lsfg-status) status=0; lsfg_report || status=$?; exit $status ;;
     --play) mode=play; shift ;;
     --launcher) mode=launcher; shift ;;
     --prepare-only) mode=prepare; shift ;;
@@ -249,11 +398,48 @@ for pair in gearbox:BB_GEARBOX brake_assist:BB_BRAKE_ASSIST hardcore:BB_HARDCORE
     [[ $value == game ]] || setdefault "${pair#*:}" "$value"
 done
 for key in "${!cfg_env[@]}"; do setdefault "$key" "${cfg_env[$key]}"; done
+# Lossless Scaling frame generation (lsfg=1): lsfg-vk's environment configuration, for this game only (its own
+# conf.toml and profiles stay as they are), and only its layer let through the filter below.
+lsfg_on=0
+if [[ ${cfg[lsfg]:-0} == 1 ]]; then
+    if lsfg_find; then
+        lsfg_on=1
+        layer_dir=$data/lsfg/implicit_layer.d
+        mkdir -p "$layer_dir"
+        rm -f "$layer_dir"/*.json
+        lib=${lsfg_lib//\\/\\\\}; lib=${lib//&/\\&}; lib=${lib//|/\\|}
+        sed -E "s|(\"library_path\"[[:space:]]*:[[:space:]]*)\"[^\"]*\"|\\1\"$lib\"|" "$lsfg_manifest" > "$layer_dir/$lsfg_name.json"
+        # Searched before the system's folders: the loader keeps this copy and drops the system's (the same name).
+        export VK_ADD_IMPLICIT_LAYER_PATH="$layer_dir${VK_ADD_IMPLICIT_LAYER_PATH:+:$VK_ADD_IMPLICIT_LAYER_PATH}"
+        export VK_LOADER_LAYERS_ALLOW="${VK_LOADER_LAYERS_ALLOW:+$VK_LOADER_LAYERS_ALLOW,}$lsfg_name"
+        flow=$(awk -v s="${cfg[lsfg_flow_scale]:-100}" 'BEGIN { if (s < 25) s = 25; if (s > 100) s = 100; printf "%.2f", s / 100 }')
+        if [[ $lsfg_name == VK_LAYER_LSFGVK_frame_generation ]]; then
+            unset DISABLE_LSFGVK
+            setdefault LSFGVK_ENV 1
+            setdefault LSFGVK_MULTIPLIER "${cfg[lsfg_multiplier]:-2}"
+            setdefault LSFGVK_FLOW_SCALE "$flow"
+            setdefault LSFGVK_PERFORMANCE_MODE "${cfg[lsfg_performance]:-0}"
+            setdefault LSFGVK_DLL_PATH "$lsfg_dll"
+            setdefault DISABLE_LSFG 1 # an lsfg-vk 1.x layer next to it stays out
+        else # lsfg-vk 1.x: its "legacy" environment configuration
+            unset DISABLE_LSFG
+            setdefault LSFG_LEGACY 1
+            setdefault LSFG_MULTIPLIER "${cfg[lsfg_multiplier]:-2}"
+            setdefault LSFG_FLOW_SCALE "$flow"
+            setdefault LSFG_PERFORMANCE_MODE "${cfg[lsfg_performance]:-0}"
+            setdefault LSFG_DLL_PATH "$lsfg_dll"
+        fi
+        echo "DriveClub: Lossless Scaling frame generation ${cfg[lsfg_multiplier]:-2}x: $lsfg_lib, $lsfg_dll"
+    else
+        echo "DriveClub: Lossless Scaling frame generation stays off: $lsfg_problem (bash run.sh --lsfg-status)" >&2
+    fi
+fi
 # MangoHud (bundled in the AppImage): mangohud=1 in the settings, or MANGOHUD=1.
 [[ ${cfg[mangohud]:-0} == 1 ]] && setdefault MANGOHUD 1
 # Vulkan layers that install themselves (overlays, capture tools) stay out unless asked for, as on Windows.
 [[ ${MANGOHUD:-0} == 1 || ${cfg[overlays]:-0} == 1 ]] || setdefault VK_LOADER_LAYERS_DISABLE '~implicit~'
 summary="preset=${cfg[preset]} output=$output render=$render fps=${cfg[fps]} aa=${cfg[aa]} upscale=${cfg[upscale]} mirror=$mirror two_thread=${cfg[two_thread]}"
+(( lsfg_on )) && summary+=" lsfg=${cfg[lsfg_multiplier]:-2}x"
 export BB_SETTINGS_SUMMARY="run.sh: $summary"
 
 prep=$data/prep

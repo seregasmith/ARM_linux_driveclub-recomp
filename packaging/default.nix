@@ -167,6 +167,15 @@ pkgs.stdenv.mkDerivation {
     ${pkgs.bash}/bin/bash -n $d/run.sh
     $d/bin/dc-prepare --patches-xml $d/patches/DriveClub.xml --list > /dev/null
     ${python}/bin/python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' $d/dc_vulkan.py
+    # run.sh's lsfg-vk check (exit code 1: no lsfg-vk here, as expected).
+    mkdir -p $TMPDIR/lsfg-home
+    set +e
+    HOME=$TMPDIR/lsfg-home ${pkgs.bash}/bin/bash $d/run.sh --lsfg-status > $TMPDIR/lsfg.log 2>&1
+    status=$?
+    set -e
+    if [ $status -gt 1 ]; then
+      echo "selftest: run.sh --lsfg-status failed ($status):" >&2; cat $TMPDIR/lsfg.log >&2; exit 1
+    fi
     # The launcher draws every page off-screen (SDL's offscreen video driver, software rendering). Exit code 2: SDL
     # could not open a window here at all, which says nothing about the package.
     mkdir -p $TMPDIR/launcher-home

@@ -183,6 +183,30 @@ void Model::Build(const std::vector<PatchInfo>& patches, int display_hz) {
     toggle(kTabGraphics, "Rendering", "two_thread", "Two-thread rendering",
            "Records each frame's draw commands on a second thread. Turn it off if you see flicker or broken graphics.",
            true);
+    // ---- Graphics: frame generation by lsfg-vk, a Vulkan layer installed on the system, with the shaders of Lossless
+    // Scaling (Steam). run.sh sets its variables for the game only (docs/ARM64_LINUX.md, "Frame generation").
+    toggle(kTabGraphics, "Frame generation", "lsfg", "Lossless Scaling frame generation",
+           "lsfg-vk adds generated frames between the game's own: smoother motion, a little more input lag. Needs "
+           "lsfg-vk installed and Lossless Scaling owned and installed in Steam (any library, the SD card too).",
+           false);
+    {
+        std::string hint = "Frames shown for each frame the game draws. The game's frame rate times this should match "
+                           "the screen";
+        const int hz = display_hz > 0 ? display_hz : 120;
+        hint += display_hz > 0 ? " (" + std::to_string(hz) + " Hz here)" : "";
+        hint += hz >= 120 ? ": 60 FPS × 2 or 30 FPS × 4 for 120 Hz." : ": 30 FPS × 2 for 60 Hz.";
+        hint += " Above the refresh rate the game itself slows down.";
+        choice(kTabGraphics, "Frame generation", "lsfg_multiplier", "Multiplier", hint.c_str(),
+               {{"2", "2x"}, {"3", "3x"}, {"4", "4x"}}, 0);
+    }
+    slider(kTabGraphics, "Frame generation", "lsfg_flow_scale", "Flow scale",
+           "The resolution motion is estimated at: lower is faster, 100% follows fine detail best. 70 to 80% suits a "
+           "handheld.",
+           25, 100, 5, 100, "%");
+    toggle(kTabGraphics, "Frame generation", "lsfg_performance", "Performance mode",
+           "A lighter frame generation model: much faster on a handheld, slightly softer generated frames.", false);
+    add(kTabGraphics, "Frame generation", "@lsfg_check", "Check lsfg-vk and Lossless Scaling",
+        "Shows what was found: the lsfg-vk layer, its library and Lossless.dll, or what is missing.", Kind::Button);
 
     // ---- Detail: an edited copy of the game's global.rpk (launcher/graphics.cpp), built from your own dump.
     toggle(kTabDetail, "Models", "detail.own_car", "Your car: full detail",
@@ -339,6 +363,8 @@ std::string Model::Locked(int row) const {
     if (r.id == std::string("patch:") + kBlurPatch && fsr) return "FSR 3.1 needs the game's blur pass: it stays on with FSR.";
     if (r.id == "detail.motion_blur" && fsr) return "FSR 3.1 needs the game's motion blur shader: it stays on with FSR.";
     if (r.id == "env.FEX_VECTORTSOENABLED" && sel("env.FEX_TSOENABLED") == "0") return "Needs TSO emulation on.";
+    if ((r.id == "lsfg_multiplier" || r.id == "lsfg_flow_scale" || r.id == "lsfg_performance") && sel("lsfg") != "1")
+        return "Turn on Lossless Scaling frame generation first.";
     return "";
 }
 
@@ -572,6 +598,7 @@ std::string Model::Summary() const {
     if (rows[Find("fps")].choices[rows[Find("fps")].sel].value == "unlocked") s += " (cap " + v("fps_cap") + ")";
     s += " · output " + v("output") + ", render " + v("render");
     if (rows[Find("aa")].choices[rows[Find("aa")].sel].value == "fsr3") s += " · FSR 3.1 " + v("upscale");
+    if (rows[Find("lsfg")].sel == 1) s += " · frame generation " + v("lsfg_multiplier");
     s += " · " + v("language");
     return s;
 }

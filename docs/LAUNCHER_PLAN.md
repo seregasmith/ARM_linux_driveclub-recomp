@@ -91,7 +91,7 @@ How each kind of setting behaves:
 - **Button** (Play, Change folder, the tools): A.
 - **Text** (player name): A opens the on-screen keyboard (below).
 - **Locked rows** are dimmed and the help bar says why (Upscaling needs FSR 3.1; Motion blur cannot change while
-  FSR 3.1 is on; the frame cap needs the Unlocked frame rate).
+  FSR 3.1 is on; the frame cap needs the Unlocked frame rate; the frame generation rows need it switched on).
 
 ## Screen
 
@@ -133,6 +133,11 @@ folder of replacement game files built from the player's own archive and served 
 | Anisotropic filtering | Automatic, Off, 2x, 4x, 8x, 16x | env `BB_ANISO` |
 | Mirror and reflection updates | Live, Static | env `BB_MIRROR_RATE` |
 | Two-thread rendering | on, off | file `user/toggles.txt` |
+| Lossless Scaling frame generation | on, off | lsfg-vk's environment configuration, its layer let in (`run.sh`; ARM64_LINUX.md, "Frame generation") |
+| Multiplier | 2x, 3x, 4x (frame generation only) | env `LSFGVK_MULTIPLIER` |
+| Flow scale | 25 … 100 % (frame generation only) | env `LSFGVK_FLOW_SCALE` |
+| Performance mode | on, off (frame generation only) | env `LSFGVK_PERFORMANCE_MODE` |
+| Check lsfg-vk and Lossless Scaling | button: what `run.sh --lsfg-status` found ("ready" / "not ready" on the row) | |
 
 ### 3. Detail (ported from `launcher/graphics.cpp`)
 
@@ -252,6 +257,7 @@ a fresh install, a reset row and "Reset all settings" all give exactly today's g
 | Anisotropic filtering | Automatic | `BB_ANISO` unset: the runtime's choice |
 | Mirror and reflection updates | Static | from the preset (`BB_MIRROR_RATE=0`) |
 | Two-thread rendering | on | `user/toggles.txt` |
+| Lossless Scaling frame generation | off | (2x, flow scale 100 %, performance mode off when on) |
 | Detail tab | all at the game's values | no `global.rpk` built |
 | Language | English (US) | `BB_LANGUAGE` unset: the runtime's 1 |
 | Player name | Player | |
@@ -289,12 +295,15 @@ find.
 - `packaging/default.nix`, `appimage.sh`: ship `dc-launcher`; the package check also renders every tab off-screen
   (`dc-launcher --selftest`, SDL's offscreen video driver).
 - `docs/ARM64_LINUX.md`: the launcher replaces "no launcher window" in Running.
+- Added after version 1: Lossless Scaling frame generation (lsfg-vk, a layer installed on the system) on the
+  Graphics tab; `run.sh --lsfg-status` finds lsfg-vk and `Lossless.dll` for the launcher's check and the game's start.
 
 ## Not in version 1
 
 - Benchmark tab (the runtime's benchmark works through `env.BB_BENCHMARK...` meanwhile).
 - The features that are Windows-only in the runtime: high-FPS camera workaround, field-of-view slider (F5/F6),
-  motion-blur exposure, wheel setup and force feedback, DLSS, frame generation, HDR, update checker.
+  motion-blur exposure, wheel setup and force feedback, DLSS, the runtime's own frame generation, HDR, update
+  checker. (Lossless Scaling frame generation through lsfg-vk is on the Graphics tab.)
 - Ultrawide resolutions and their FOV fix as rows (they stay available in Advanced → All patches).
 
 ## Phases
