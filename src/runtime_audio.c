@@ -8,6 +8,7 @@
  * ports only follow the clock. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "../gpu/shim/bbport_diagnostics.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,8 +131,8 @@ static ABI int32_t audio_open(int32_t user, int32_t type, int32_t index, uint32_
         if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
         else fprintf(stderr,"Runtime: SDL audio stream failed (%s); port %d uses the timer sink\n",SDL_GetError(),id);
     }
-    p->stats=getenv("BB_AUDIO_STATS")!=NULL;
-    const char *dump=getenv("BB_AUDIO_DUMP");
+    p->stats=BB_DIAGNOSTIC_ENV("BB_AUDIO_STATS")!=NULL;
+    const char *dump=BB_DIAGNOSTIC_ENV("BB_AUDIO_DUMP");
     if (dump) {
         char path[4096];
         snprintf(path,sizeof(path),"%s.port%d.%dch.%s",dump,id,p->channels,p->is_float ? "f32" : "s16");

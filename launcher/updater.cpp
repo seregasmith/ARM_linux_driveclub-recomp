@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "miniz.h"
+
 namespace Updater {
 namespace {
 
@@ -177,7 +179,8 @@ bool OnlyOwnFiles(const std::wstring& dir) {
   do {
     const wchar_t* n = data.cFileName;
     if (wcscmp(n, L".") == 0 || wcscmp(n, L"..") == 0) continue;
-    if (_wcsicmp(n, L"package.zip") != 0 && _wcsicmp(n, L"new") != 0 && _wcsicmp(n, L"apply.cmd") != 0) own = false;
+    if (_wcsicmp(n, L"package.zip") != 0 && _wcsicmp(n, L"new") != 0 && _wcsicmp(n, L"apply.cmd") != 0 &&
+        _wcsicmp(n, L"launcher-update.exe") != 0) own = false;
   } while (own && FindNextFileW(h, &data));
   FindClose(h);
   return own;
@@ -190,6 +193,191 @@ void RemoveTree(const std::wstring& dir) {
   op.pFrom = from.c_str();
   op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_SILENT;
   SHFileOperationW(&op);
+}
+
+// The unpacking and the copying are done here, not by tar.exe, robocopy and cmd.exe: those are not there under Wine and
+// Proton, and a script the launcher leaves behind may not survive the launcher's own exit there.
+
+void MakeDirs(const std::wstring& dir) {
+  for (size_t i = 3; i <= dir.size(); ++i) {
+    if (i == dir.size() || dir[i] == L'\\') CreateDirectoryW(dir.substr(0, i).c_str(), nullptr);
+  }
+}
+
+bool ReadWholeFile(const std::wstring& path, std::vector<uint8_t>& data) {
+  HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return false;
+  LARGE_INTEGER size{};
+  bool ok = GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1ll << 31);
+  if (ok) {
+    data.resize(size_t(size.QuadPart));
+    size_t done = 0;
+    while (ok && done < data.size()) {
+      DWORD n = 0;
+      ok = ReadFile(f, data.data() + done, DWORD((std::min<size_t>)(data.size() - done, 1u << 24)), &n, nullptr) && n > 0;
+      done += n;
+    }
+  }
+  CloseHandle(f);
+  return ok;
+}
+
+bool WriteWholeFile(const std::wstring& path, const void* data, size_t size) {
+  HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return false;
+  bool ok = true;
+  size_t done = 0;
+  while (ok && done < size) {
+    DWORD n = 0;
+    ok = WriteFile(f, static_cast<const uint8_t*>(data) + done, DWORD((std::min<size_t>)(size - done, 1u << 24)), &n, nullptr) && n > 0;
+    done += n;
+  }
+  return CloseHandle(f) && ok;
+}
+
+// Unpacks the zip into `dest`. A name that leaves the folder (an absolute path, a drive, ..) stops it.
+bool Unpack(const std::wstring& zip_path, const std::wstring& dest, std::wstring& error) {
+  std::vector<uint8_t> data;
+  if (!ReadWholeFile(zip_path, data)) {
+    error = L"The download could not be read.";
+    return false;
+  }
+  mz_zip_archive zip{};
+  if (!mz_zip_reader_init_mem(&zip, data.data(), data.size(), 0)) {
+    error = L"The download is not a zip file. Nothing was changed.";
+    return false;
+  }
+  bool ok = true;
+  const mz_uint count = mz_zip_reader_get_num_files(&zip);
+  for (mz_uint i = 0; ok && i < count; ++i) {
+    mz_zip_archive_file_stat st{};
+    if (!mz_zip_reader_file_stat(&zip, i, &st)) {
+      error = L"The download could not be read.";
+      ok = false;
+      break;
+    }
+    std::string name = st.m_filename;
+    if (name.empty() || name[0] == '/' || name[0] == '\\' || name.find(':') != std::string::npos ||
+        name.find("..") != std::string::npos) {
+      error = L"The download holds a file name that is not allowed. Nothing was changed.";
+      ok = false;
+      break;
+    }
+    std::replace(name.begin(), name.end(), '/', '\\');
+    const std::wstring target = dest + L"\\" + Widen(name);
+    if (st.m_is_directory) {
+      MakeDirs(target);
+      continue;
+    }
+    MakeDirs(target.substr(0, target.find_last_of(L'\\')));
+    size_t size = 0;
+    void* bytes = mz_zip_reader_extract_to_heap(&zip, i, &size, 0);
+    if (!bytes && st.m_uncomp_size != 0) {
+      error = L"A file in the download could not be unpacked.";
+      ok = false;
+      break;
+    }
+    ok = WriteWholeFile(target, bytes, size);
+    mz_free(bytes);
+    if (!ok) error = L"A file of the update could not be written.";
+  }
+  mz_zip_reader_end(&zip);
+  return ok;
+}
+
+bool EqualsNoCase(const std::wstring& a, const wchar_t* b) { return _wcsicmp(a.c_str(), b) == 0; }
+
+// What the update does not touch: the player's own folders and settings.
+bool IsPlayersOwn(const std::wstring& relative) {
+  const size_t slash = relative.find(L'\\');
+  if (slash == std::wstring::npos) return EqualsNoCase(relative, L"launcher.ini");
+  const std::wstring top = relative.substr(0, slash);
+  for (const wchar_t* own : {L"data", L"logs", L"mods", L"update", L"update_download"}) {
+    if (EqualsNoCase(top, own)) return true;
+  }
+  return false;
+}
+
+void ListFiles(const std::wstring& root, const std::wstring& relative, std::vector<std::wstring>& out) {
+  WIN32_FIND_DATAW data;
+  HANDLE h = FindFirstFileW((root + (relative.empty() ? std::wstring() : L"\\" + relative) + L"\\*").c_str(), &data);
+  if (h == INVALID_HANDLE_VALUE) return;
+  do {
+    const std::wstring n = data.cFileName;
+    if (n == L"." || n == L"..") continue;
+    const std::wstring rel = relative.empty() ? n : relative + L"\\" + n;
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ListFiles(root, rel, out);
+    else out.push_back(rel);
+  } while (FindNextFileW(h, &data));
+  FindClose(h);
+}
+
+// A file that is in use for a moment (an antivirus scan) is tried again for a while.
+bool CopyWithRetries(const std::wstring& from, const std::wstring& to) {
+  for (int attempt = 0; attempt < 40; ++attempt) {
+    if (CopyFileW(from.c_str(), to.c_str(), FALSE)) return true;
+    Sleep(250);
+  }
+  return false;
+}
+
+// Copies the new files over the program files. The launcher's own exe goes last and is first renamed aside, which a
+// running program allows; the first start of the new launcher deletes it.
+std::wstring RunningLauncherName() {
+  wchar_t path[32768];
+  const DWORD n = GetModuleFileNameW(nullptr, path, 32768);
+  if (!n || n >= 32768) return L"DriveClub.exe";
+  const std::wstring full(path, n);
+  return full.substr(full.find_last_of(L"\\/") + 1);
+}
+bool Apply(const std::wstring& root, const std::wstring& home, std::wstring& error,
+           const std::wstring& running = RunningLauncherName()) {
+  std::vector<std::wstring> files;
+  ListFiles(root, L"", files);
+  std::sort(files.begin(), files.end());
+  const std::wstring self = L"DriveClub.exe";
+  for (const auto& rel : files) {
+    if (IsPlayersOwn(rel) || EqualsNoCase(rel, self.c_str()) || EqualsNoCase(rel, running.c_str())) continue;
+    const std::wstring to = home + L"\\" + rel;
+    MakeDirs(to.substr(0, to.find_last_of(L'\\')));
+    if (!CopyWithRetries(root + L"\\" + rel, to)) {
+      error = L"The file " + rel + L" could not be replaced. The update was stopped; start the launcher again and retry.";
+      return false;
+    }
+  }
+  // A native fallback can be running alongside its bootstrap parent. Rename
+  // both executables aside, rather than trying to overwrite a mapped image.
+  std::vector<std::wstring> own{self};
+  if (!EqualsNoCase(running, self.c_str())) own.push_back(running);
+  for (const auto& name : own) {
+    if (GetFileAttributesW((root + L"\\" + name).c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+    const std::wstring exe = home + L"\\" + name, old_exe = exe + L".old";
+    bool moved = false;
+    if (GetFileAttributesW(exe.c_str()) != INVALID_FILE_ATTRIBUTES) {
+      moved = MoveFileExW(exe.c_str(), old_exe.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+      if (!moved) {
+        error = L"The launcher could not be replaced.";
+        return false;
+      }
+    }
+    if (!CopyWithRetries(root + L"\\" + name, exe)) {
+      if (moved) MoveFileExW(old_exe.c_str(), exe.c_str(), MOVEFILE_REPLACE_EXISTING);
+      error = L"The new launcher could not be written. Nothing of the launcher was changed.";
+      return false;
+    }
+  }
+  return true;
+}
+
+bool StartLauncher(const std::wstring& home) {
+  std::wstring cmd = L"\"" + home + L"\\DriveClub.exe\"";
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS, nullptr, home.c_str(), &si, &pi)) return false;
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return true;
 }
 
 std::string Between(const std::string& s, size_t from, const char* open, char close, size_t* next) {
@@ -257,7 +445,8 @@ bool CheckNewer(const std::wstring& current, Release& out, std::string& why) {
   return true;
 }
 
-bool Install(const Release& release, const std::wstring& home, const std::function<void(int)>& progress, std::wstring& error) {
+bool Stage(const Release& release, const std::wstring& home, const std::function<void(int)>& progress,
+           std::wstring& root, std::wstring& error) {
   const std::wstring dir = home + kStaging;
   if (OnlyOwnFiles(dir)) RemoveTree(dir);
   if (!CreateDirectoryW(dir.c_str(), nullptr) && !OnlyOwnFiles(dir)) {
@@ -294,41 +483,99 @@ bool Install(const Release& release, const std::wstring& home, const std::functi
 
   const std::wstring unpacked = dir + L"\\new";
   CreateDirectoryW(unpacked.c_str(), nullptr);
-  DWORD code = 1;
-  if (!Run(L"tar.exe -xf \"" + zip + L"\" -C \"" + unpacked + L"\"", 120000, code, false) || code != 0) {
-    error = L"Windows could not unpack the download (tar.exe). Get the zip from the Releases page instead.";
-    return false;
-  }
-  const std::wstring root = unpacked + L"\\" + zip_name.substr(0, zip_name.size() - 4);
+  if (!Unpack(zip, unpacked, error)) return false;
+  root = unpacked + L"\\" + zip_name.substr(0, zip_name.size() - 4);
   if (GetFileAttributesW((root + L"\\DriveClub.exe").c_str()) == INVALID_FILE_ATTRIBUTES) {
     error = L"The download does not hold DriveClub.exe. Nothing was changed.";
-    return false;
-  }
-
-  // The script waits (robocopy retries while the launcher still holds its files), copies everything except the
-  // player's own folders and settings, starts the new launcher and is cleaned up by it on its first start.
-  const std::wstring script = dir + L"\\apply.cmd";
-  const std::string text = "@echo off\r\n"
-                           "robocopy \"" + std::string(root.begin(), root.end()) + "\" \"" + std::string(home.begin(), home.end()) +
-                           "\" /E /R:60 /W:1 /NFL /NDL /NJH /NJS /XD data logs mods update update_download /XF launcher.ini >nul\r\n"
-                           "if errorlevel 8 exit /b 1\r\n"
-                           "start \"\" \"" + std::string(home.begin(), home.end()) + "\\DriveClub.exe\"\r\n";
-  HANDLE f = CreateFileW(script.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (f == INVALID_HANDLE_VALUE) {
-    error = L"Cannot write the update script.";
-    return false;
-  }
-  DWORD w = 0;
-  WriteFile(f, text.data(), DWORD(text.size()), &w, nullptr);
-  CloseHandle(f);
-  if (!Run(L"cmd.exe /c \"\"" + script + L"\"\"", 0, code, true)) {
-    error = L"Cannot start the update script.";
     return false;
   }
   return true;
 }
 
+bool Install(const Release& release, const std::wstring& home, const std::function<void(int)>& progress, std::wstring& error) {
+  std::wstring root;
+  if (!Stage(release, home, progress, root, error) || !Apply(root, home, error)) return false;
+  if (!StartLauncher(home)) {
+    error = L"The update is installed. Start the launcher again.";
+    return false;
+  }
+  return true;
+}
+
+// Refuse an arbitrary PID: the waiter must be this package's WPF frontend.
+HANDLE OpenShell(const std::wstring& home, DWORD pid) {
+  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return nullptr;
+  wchar_t image[32768]; DWORD size = 32768;
+  if (!QueryFullProcessImageNameW(process, 0, image, &size) ||
+      _wcsicmp(std::wstring(image, size).c_str(), (home + L"\\DriveClub.Launcher.exe").c_str()) != 0) {
+    CloseHandle(process); return nullptr;
+  }
+  return process;
+}
+
+bool Defer(const std::wstring& root, const std::wstring& home, DWORD shell_pid, std::wstring& error) {
+  HANDLE shell = OpenShell(home, shell_pid);
+  if (!shell) { error = L"The launcher process could not be verified. Nothing was installed."; return false; }
+  CloseHandle(shell);
+  wchar_t self[32768]; DWORD size = GetModuleFileNameW(nullptr, self, 32768);
+  const std::wstring helper = home + kStaging + L"\\launcher-update.exe";
+  if (!size || size >= 32768 || !CopyFileW(self, helper.c_str(), FALSE)) {
+    error = L"The update helper could not be written. Nothing was installed."; return false;
+  }
+  const std::wstring package = root.substr(root.find_last_of(L"\\/") + 1);
+  std::wstring command = L"\"" + helper + L"\" --complete-wpf-update " + std::to_wstring(shell_pid) + L" \"" + package + L"\"";
+  STARTUPINFOW si{}; si.cb = sizeof(si); PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                      nullptr, home.c_str(), &si, &pi)) {
+    error = L"The update helper could not start. Nothing was installed."; return false;
+  }
+  CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return true;
+}
+
+bool InstallForShell(const Release& release, const std::wstring& home, unsigned long shell_pid,
+                     const std::function<void(int)>& progress, std::wstring& error) {
+  HANDLE shell = OpenShell(home, shell_pid);
+  if (!shell) { error = L"The launcher process could not be verified. Nothing was installed."; return false; }
+  CloseHandle(shell);
+  std::wstring root;
+  return Stage(release, home, progress, root, error) && Defer(root, home, shell_pid, error);
+}
+
+int RunDeferred(int argc, wchar_t** argv) {
+  if (argc < 2 || wcscmp(argv[1], L"--complete-wpf-update") != 0) return -1;
+  if (argc != 4) return 1;
+  wchar_t* end = nullptr; unsigned long pid = wcstoul(argv[2], &end, 10);
+  const std::wstring package = argv[3];
+  if (!pid || !end || *end || package.rfind(L"driveclub-recomp-", 0) != 0 ||
+      package.find_first_of(L"\\/:") != std::wstring::npos || package.find(L"..") != std::wstring::npos) return 1;
+  wchar_t self[32768]; DWORD size = GetModuleFileNameW(nullptr, self, 32768);
+  if (!size || size >= 32768) return 1;
+  const std::wstring exe(self, size), suffix = L"\\update_download\\launcher-update.exe";
+  if (exe.size() <= suffix.size() || _wcsicmp(exe.substr(exe.size() - suffix.size()).c_str(), suffix.c_str()) != 0) return 1;
+  const std::wstring home = exe.substr(0, exe.size() - suffix.size());
+  // Keep the real process handle across the wait; PID reuse cannot end it early.
+  HANDLE shell = OpenShell(home, pid);
+  if (!shell) {
+    // A very fast shell may already have exited before the helper is scheduled.
+    HANDLE other = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (other) { CloseHandle(other); return 1; }
+    if (GetLastError() != ERROR_INVALID_PARAMETER) return 1;
+  } else {
+    const DWORD waited = WaitForSingleObject(shell, 120000); CloseHandle(shell);
+    if (waited != WAIT_OBJECT_0) return 1;
+  }
+  std::wstring error;
+  const bool installed = Apply(home + kStaging + L"\\new\\" + package, home, error);
+  if (installed && StartLauncher(home)) return 0;
+  if (error.empty()) error = L"The update is installed. Start the launcher again.";
+  MessageBoxW(nullptr, error.c_str(), L"DRIVECLUB update", MB_OK | MB_ICONERROR);
+  return 1;
+}
+
 void CleanUp(const std::wstring& home) {
+  DeleteFileW((home + L"\\DriveClub.exe.old").c_str());
+  DeleteFileW((home + L"\\" + RunningLauncherName() + L".old").c_str());
   for (const wchar_t* name : {kStaging, kOldStaging}) {
     const std::wstring dir = home + name;
     if (OnlyOwnFiles(dir)) RemoveTree(dir);

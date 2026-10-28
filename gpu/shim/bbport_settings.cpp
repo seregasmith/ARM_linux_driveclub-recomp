@@ -93,6 +93,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
                                 : value == "short" || value == "60" ? 60 : 0;
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "show_pedals") {
+        v.show_pedals = i != 0;
     } else if (key == "fsr4_auto_exposure") {
         v.fsr4_auto_exposure = i != 0;
     } else if (key == "fsr4_invert_jitter") {
@@ -252,6 +254,7 @@ void Save() {
                  v.debug_view.load(), int(v.show_fps.load()),
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
     std::fprintf(file, "motion_blur_reference=%d\n", v.motion_blur_reference.load());
+    std::fprintf(file, "show_pedals=%d\n", int(v.show_pedals.load()));
     std::fprintf(file, "aa_scale=%s", AaScaleName(v.aa_scale));
     std::fputc(10, file);
     std::fprintf(file, "aa=%s", AaName(v.aa_mode));

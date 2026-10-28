@@ -1,3 +1,4 @@
+#include "../../../shim/bbport_diagnostics.h"
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -6,6 +7,7 @@
 #include <psapi.h>
 #endif
 #include "bbport_frame_info.h"
+#include "bbport_launch_ready.h"
 #include "bbport_frametrace.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
@@ -208,6 +210,8 @@ Presenter::~Presenter() {
     draw_scheduler.Finish();
     present_scheduler.Finish();
     flip_scheduler.Finish();
+    Check(instance.GetDevice().waitIdle());
+    BbOverlay::Shutdown();
     Check(draw_scheduler.CommandBuffer().reset());
     Check(present_scheduler.CommandBuffer().reset());
     Check(flip_scheduler.CommandBuffer().reset());
@@ -515,7 +519,7 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     cmdbuf.copyImageToBuffer(image, layout, buffer,
                              vk::BufferImageCopy{.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
                                                  .imageExtent = {w, h, 1}});
-    const char* dir = std::getenv("BB_DUMP_DIR");
+    const char* dir = BB_DIAGNOSTIC_ENV("BB_DUMP_DIR");
     char path[512];
     std::snprintf(path, sizeof(path), "%s/%s_%03d_%ux%u.raw", dir && *dir ? dir : "out/dump", name,
                   index, w, h);
@@ -559,7 +563,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // bbport: BB_FRAME_DUMP_TRIGGER=<file>: when the file exists it is removed and this frame's
     // guest display buffer and presented image are written to BB_DUMP_DIR (default out/dump)
     // as raw 32-bit pixels (menus and movies included; the upscaler dumps scene frames only).
-    static const char* frame_dump_trigger = std::getenv("BB_FRAME_DUMP_TRIGGER");
+    static const char* frame_dump_trigger = BB_DIAGNOSTIC_ENV("BB_FRAME_DUMP_TRIGGER");
     static int frame_dump_index = 0;
     const bool frame_dump = frame_dump_trigger && std::remove(frame_dump_trigger) == 0;
     // bbport: scaled upscaler presets: the output-size display buffer drawn by the port.
@@ -1018,7 +1022,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         wait_until(start + step * shown);
     }
     const auto presented_generated = std::chrono::steady_clock::now();
-    if (!PresentImage(frame, frame->image, true)) {
+    if (!PresentImage(frame, frame->image, true, is_game_frame && !is_reusing_frame)) {
         if (shown) {
             // The frame's fence was not reset and so does not cover the generated frames'
             // blits: they must be done before the frame is drawn again.
@@ -1048,7 +1052,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
     // bbport: BB_FPS_LOG=1: frame generation's pacing every 5 seconds.
     static const bool fg_trace = [] {
-        const char* env = std::getenv("BB_FPS_LOG");
+        const char* env = BB_DIAGNOSTIC_ENV("BB_FPS_LOG");
         return env && env[0] == '1';
     }();
     if (fg_trace && is_game_frame && !is_reusing_frame) {
@@ -1221,7 +1225,7 @@ void Presenter::UpdateFrameGenLimit(bool wanted, double present_ms) {
     settings.frame_gen_display_hz = int(hz);
 }
 
-bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
+bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last, bool notify_launcher) {
     if (!swapchain.AcquireNextImage()) {
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
         if (!swapchain.AcquireNextImage()) {
@@ -1385,7 +1389,11 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
     // Present to swapchain.
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
-        if (!swapchain.Present() && window.GetWidth() != 0 && window.GetHeight() != 0) {
+        const bool presented = swapchain.Present();
+        if (presented && notify_launcher) {
+            BbLauncherReady::GameFramePresented(true, false);
+        }
+        if (!presented && window.GetWidth() != 0 && window.GetHeight() != 0) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
         }
     }

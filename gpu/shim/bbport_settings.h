@@ -74,6 +74,16 @@ inline bool UpscalerOptIn() {
     return on;
 }
 
+/// Camera and object vectors are also useful to DriveAA's DLSS path, which is selected with
+/// BB_AA instead of the standalone temporal upscaler's BB_UPSCALER setting.
+inline bool MotionVectorsOptIn() {
+    if (UpscalerOptIn()) {
+        return true;
+    }
+    const char* aa = std::getenv("BB_AA");
+    return aa && std::strcmp(aa, "dlss") == 0;
+}
+
 struct Values {
     /// HDR output (BB_HDR=1 and a display in HDR mode): set by the presenter; the rasterizer then
     /// keeps the picture before the UI. Brightness of SDR white (UI, menus) and of the brightest
@@ -95,6 +105,7 @@ struct Values {
     // 0: unmodified control; 30: Slow; 60: Fast. F3 switches the two exposure presets.
     std::atomic<int> motion_blur_reference{0};
     std::atomic<bool> show_fps{true}; // ssport: on by default
+    std::atomic<bool> show_pedals{false}; // the pedals' travel, bottom left (F2)
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};

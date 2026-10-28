@@ -7,3 +7,8 @@ dist/
 pgo/
 packaging/runtime-paths.nix
 .idea/
+mods/
+launcher/wpf/bin/
+launcher/wpf/obj/
+launcher/tests/**/bin/
+launcher/tests/**/obj/

@@ -31,8 +31,10 @@
 #include <cwchar>
 #include <fstream>
 #include <string>
+#include <sstream>
 #include <thread>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #include "datx.h"
 #include "scene_track_names.h"
@@ -54,6 +56,20 @@ const Color kBg(255, 16, 18, 22), kCard(255, 24, 27, 33), kCardLine(255, 38, 42,
     kMuted(255, 139, 147, 161), kTrack(255, 33, 37, 45), kTrackHover(255, 45, 50, 60), kAccent(255, 224, 64, 38),
     kAccentHover(255, 240, 84, 58), kOff(255, 63, 69, 82), kWhite(255, 245, 246, 248), kOk(255, 90, 200, 120),
     kWarn(255, 240, 170, 60), kBad(255, 240, 96, 84);
+
+// The launcher's font: Segoe UI where there is one. Under Wine and Proton there often is not, and GDI+ then draws no text at
+// all, so the first of the others that exists is used.
+const FontFamily* UiFamily() {
+  static const FontFamily* family = []() -> const FontFamily* {
+    for (const wchar_t* name : {L"Segoe UI", L"Tahoma", L"Arial", L"Liberation Sans", L"DejaVu Sans", L"Verdana"}) {
+      auto* candidate = new FontFamily(name);
+      if (candidate->IsAvailable()) return candidate;
+      delete candidate;
+    }
+    return FontFamily::GenericSansSerif();
+  }();
+  return family;
+}
 
 constexpr float kMargin = 24.f, kGap = 18.f, kHeaderH = 92.f, kFooterH = 96.f, kPad = 22.f, kTitleH = 44.f;
 constexpr float kTabH = 46.f;  // the row of tabs under the header: one group of cards at a time
@@ -124,16 +140,26 @@ int g_hover_tab = -1;
 int g_hover_info = -1, g_info_open = -1;
 
 // The cards are split over tabs so a page holds what belongs together and needs no scrolling.
-enum { kTabGraphics, kTabDetail, kTabGameplay, kTabDriving, kTabBench, kTabCount };
-const wchar_t* const kTabName[kTabCount] = {L"Graphics", L"Detail", L"Gameplay", L"Driving", L"Benchmark"};
+enum { kTabGraphics, kTabDetail, kTabGameplay, kTabDriving, kTabBench, kTabPatches, kTabCount };
+const wchar_t* const kTabName[kTabCount] = {L"Display", L"Graphics", L"General", L"Driving", L"Benchmark", L"Patches"};
 const wchar_t* const kTabHint[kTabCount] = {
     L"Frame rate, the sizes the game draws and shows, anti-aliasing and texture filtering.",
     L"Model, scenery, reflection and shadow detail, and the game's own camera effects.",
-    L"Your name and language, the mirrors, the window, the add-on content and the community patches.",
+    L"Player identity, add-on content, startup and overlays.",
     L"Driving: the field of view and the game's driving assists, and the steering wheel (its setup and force feedback).",
-    L"Drive one circuit on its own and get back the frame rate and the 1% and 0.1% lows."};
+    L"Drive one circuit on its own and get back the frame rate and the 1% and 0.1% lows.",
+    L"Compatibility workarounds, community patches and advanced runtime options."};
 int g_tab = kTabGraphics;
 RectF g_tab_rect[kTabCount];
+// The Discord button in the header: where it was drawn (layout pixels, before scaling), and whether the pointer is on it.
+RectF g_discord_rect;
+bool g_hover_discord = false;
+const wchar_t* const kDiscordUrl = L"https://discord.gg/62b8jceumR";
+bool HitDiscord(float x, float y) {
+  const float m = 2.f * g_scale;
+  return g_discord_rect.Width > 0 && x >= g_discord_rect.X * g_scale - m && x <= (g_discord_rect.X + g_discord_rect.Width) * g_scale + m &&
+         y >= g_discord_rect.Y * g_scale - m && y <= (g_discord_rect.Y + g_discord_rect.Height) * g_scale + m;
+}
 // The Driving tab has tabs of its own, in a smaller row under the main one (HitTab gives them as kTabCount + n).
 enum { kSubAssists, kSubWheel, kSubCount };
 const wchar_t* const kSubName[kSubCount] = {L"Assists and view", L"Wheel and force feedback"};
@@ -146,8 +172,8 @@ RectF g_sub_rect[kSubCount];
 bool HasSubTabs() { return g_tab == kTabDriving; }
 bool OnPage(const Card& card) { return card.tab == g_tab && (card.sub < 0 || card.sub == g_subtab); }
 std::wstring g_status;
+std::wstring g_settings_error;
 std::wstring g_gpu_problem;  // from CheckGpu() at start; Play stays off while it is set, unless the check is skipped
-bool g_camera_patch = true;  // enabled by default; persisted in launcher.ini
 bool g_skip_gpu_check = false;  // "Skip the graphics card check" in the launcher (skip_gpu_check= in launcher.ini)
 bool g_allow_overlays = false;  // "Let overlay programs into the game" (overlays= in launcher.ini)
 bool g_two_thread = true;       // "Two-thread rendering" (draw_threads= in launcher.ini; off by default on AMD)
@@ -322,6 +348,9 @@ enum GfxRow { kGfxCar, kGfxOpp, kGfxScenery, kGfxSsr, kGfxShadows, kGfxParticles
               kGfxHaze, kGfxFxaa, kGfxRows };
 int g_gfx[kGfxRows] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 int g_motion_blur = -1;
+int g_camera_patch_row = -1;
+bool g_camera_patch = true;
+bool g_camera_patch_saved = false;
 int motion_blur_saved = 0;  // Slow by default; Fast uses the native 60 FPS exposure.
 const wchar_t* MotionBlurHint(int choice) {
   return choice == 1
@@ -357,7 +386,7 @@ const BenchChoice kBenchTracks[] = {
     {"canada_road_circuit_01_n", L"Oliver's Landing", L"Canada"},
     {"canada_dlc_road_circuit_03_n", L"Sinclair Point", L"Canada"},
     {"canada_race_track_v1", L"Maplewood Motorsport Park", L"Canada"},
-    {"chile_road_circuit_01_n", L"Chungará Lake", L"Chile"},
+    {"chile_road_circuit_01_n", L"ChungarГЎ Lake", L"Chile"},
     {"chile_road_circuit_02_n", L"Salar de Surire", L"Chile"},
     {"chile_race_track_v1", L"Autodromo Frontera", L"Chile"},
     {"india_road_circuit_01_n", L"Glenmorgan", L"India"},
@@ -393,7 +422,7 @@ const BenchChoice kBenchCars[] = {
     {"au_rs6", L"Audi RS 6 Avant", L"Performance"},  // not run
     {"ma_mc_st", L"Maserati GranTurismo MC Stradale", L"Performance"},
     {"lo_ex", L"Lotus Exige S", L"Performance"},  // not run
-    {"au_rs5", L"Audi RS 5 Coupé", L"Sports"},
+    {"au_rs5", L"Audi RS 5 CoupГ©", L"Sports"},
     {"bm_m2", L"BMW M235i", L"Sports"},
     {"ren_dez", L"Renault DeZir", L"Sports"},
     {"vw_golf_gti", L"Volkswagen Golf GTI", L"Hot hatch"},
@@ -621,17 +650,24 @@ bool WriteWheelChanges() {
 }
 // The rows from default.ini (the runtime's defaults where it has no line); choices still waiting in launcher.ini
 // are written into it now that it exists.
+bool IsPendingWheelSetting(const std::string& line) {
+  if(line.rfind("ffb.",0)!=0) return false;
+  const auto equal=line.find('='); if(equal==std::string::npos) return false;
+  const auto key=line.substr(4,equal-4);
+  for(const auto& c:g_c) if(IsFfbKeyRow(c) && c.patches[0].substr(5)==key) return true;
+  return false;
+}
 void LoadWheel() {
   for (auto& c : g_c) if (IsFfbKeyRow(c)) c.sel = c.def;
   std::vector<std::string> pending;
-  for (const auto& l : ReadLines(IniPath())) if (l.rfind("ffb.", 0) == 0) pending.push_back(l);
+  for (const auto& l : ReadLines(IniPath())) if (IsPendingWheelSetting(l)) pending.push_back(l);
   if (WheelIniReady()) ApplyWheelLines(ReadLines(WheelIniPath()), "");
   for (auto& c : g_c) if (IsFfbKeyRow(c)) c.loaded = c.sel;
   ApplyWheelLines(pending, "ffb.");
   if (!pending.empty() && WheelIniReady() && WriteWheelChanges()) {
     // written: the waiting lines go from launcher.ini
     std::vector<std::string> keep;
-    for (const auto& l : ReadLines(IniPath())) if (l.rfind("ffb.", 0) != 0) keep.push_back(l);
+    for (const auto& l : ReadLines(IniPath())) if (!IsPendingWheelSetting(l)) keep.push_back(l);
     std::ofstream ini(IniPath().c_str(), std::ios::binary | std::ios::trunc);
     for (const auto& l : keep) ini << l << "\r\n";
   }
@@ -640,7 +676,7 @@ void LoadWheel() {
 // On Save and Play: into default.ini, or, before the game has made it, as ffb.<key>= lines for launcher.ini.
 std::string SaveWheel() {
   if (WheelIniReady()) {
-    WriteWheelChanges();
+    if(!WriteWheelChanges()) g_settings_error=L"Could not save steering-wheel settings.";
     return "";
   }
   std::string pending;
@@ -653,13 +689,237 @@ std::string SaveWheel() {
 void OpenWheelSetup() {
   for (const std::wstring& p : {g_home + L"\\WheelSetup.exe", g_home + L"\\..\\WheelSetup.exe", g_home + L"\\..\\tools\\WheelSetup.exe"}) {
     if (!Exists(p)) continue;
-    ShellExecuteW(g_hwnd, L"open", p.c_str(), nullptr, Dir(p).c_str(), SW_SHOWNORMAL);
+    const auto opened = reinterpret_cast<INT_PTR>(ShellExecuteW(g_hwnd, L"open", p.c_str(), nullptr, Dir(p).c_str(), SW_SHOWNORMAL));
+    if (opened <= 32) {
+      g_status = L"Wheel Setup could not be started (Windows error " + std::to_wstring(opened) + L").";
+      g_status_color = kBad;
+      return;
+    }
     g_status = L"Wheel Setup is open: map the wheel, pedals, handbrake and shifter there, then press Save in its window.";
     g_status_color = kMuted;
     return;
   }
   g_status = L"WheelSetup.exe was not found next to DriveClub.exe.";
   g_status_color = kBad;
+}
+
+// ------------------------------------------------------------------------------------------
+// FFB gain + / - (force feedback card): two wheel buttons that make the force of the car being driven 5% stronger or
+// weaker during a race (default.ini: wheel_button = <n>, ffb_gain_up / ffb_gain_down; the game keeps each car's
+// percentage). A click waits for a button of the wheel the game reads (wheel_device). SDL3 is loaded at run time from
+// runtime\, as the game has it.
+// ------------------------------------------------------------------------------------------
+void LauncherLog(const std::string& text);
+struct SdlJoyApi {
+  HMODULE lib = nullptr;
+  bool (*InitSubSystem)(uint32_t) = nullptr;
+  uint32_t (*WasInit)(uint32_t) = nullptr;
+  uint32_t* (*GetJoysticks)(int*) = nullptr;
+  void* (*OpenJoystick)(uint32_t) = nullptr;
+  void (*CloseJoystick)(void*) = nullptr;
+  const char* (*GetJoystickName)(void*) = nullptr;
+  int (*GetNumJoystickButtons)(void*) = nullptr;
+  bool (*GetJoystickButton)(void*, int) = nullptr;
+  void (*UpdateJoysticks)() = nullptr;
+  void (*Free)(void*) = nullptr;
+};
+SdlJoyApi g_joy;
+bool LoadSdlJoysticks() {
+  static bool tried = false;
+  if (tried) return g_joy.lib != nullptr;
+  tried = true;
+  HMODULE lib = LoadLibraryExW((g_home + L"\\runtime\\SDL3.dll").c_str(), nullptr,
+                               LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  if (!lib) lib = LoadLibraryW(L"SDL3.dll");
+  if (!lib) return false;
+  auto get = [&](const char* name) { return reinterpret_cast<void*>(GetProcAddress(lib, name)); };
+  g_joy.InitSubSystem = reinterpret_cast<bool (*)(uint32_t)>(get("SDL_InitSubSystem"));
+  g_joy.WasInit = reinterpret_cast<uint32_t (*)(uint32_t)>(get("SDL_WasInit"));
+  g_joy.GetJoysticks = reinterpret_cast<uint32_t* (*)(int*)>(get("SDL_GetJoysticks"));
+  g_joy.OpenJoystick = reinterpret_cast<void* (*)(uint32_t)>(get("SDL_OpenJoystick"));
+  g_joy.CloseJoystick = reinterpret_cast<void (*)(void*)>(get("SDL_CloseJoystick"));
+  g_joy.GetJoystickName = reinterpret_cast<const char* (*)(void*)>(get("SDL_GetJoystickName"));
+  g_joy.GetNumJoystickButtons = reinterpret_cast<int (*)(void*)>(get("SDL_GetNumJoystickButtons"));
+  g_joy.GetJoystickButton = reinterpret_cast<bool (*)(void*, int)>(get("SDL_GetJoystickButton"));
+  g_joy.UpdateJoysticks = reinterpret_cast<void (*)()>(get("SDL_UpdateJoysticks"));
+  g_joy.Free = reinterpret_cast<void (*)(void*)>(get("SDL_free"));
+  if (!g_joy.InitSubSystem || !g_joy.WasInit || !g_joy.GetJoysticks || !g_joy.OpenJoystick || !g_joy.CloseJoystick ||
+      !g_joy.GetJoystickName || !g_joy.GetNumJoystickButtons || !g_joy.GetJoystickButton || !g_joy.UpdateJoysticks ||
+      !g_joy.Free) {
+    FreeLibrary(lib);
+    g_joy = SdlJoyApi{};
+    return false;
+  }
+  g_joy.lib = lib;
+  return true;
+}
+const char* const kFfbGainAction[2] = {"ffb_gain_up", "ffb_gain_down"};
+int g_ffb_gain_row[2] = {-1, -1};
+int g_ffb_gain_button[2] = {-1, -1};   // the wheel button of each, -1: none
+int g_ffb_capture = -1;                // the one waiting for a wheel button (0 +, 1 -), -1: none
+std::vector<void*> g_ffb_capture_joys;
+std::vector<std::vector<char>> g_ffb_capture_held;   // buttons held: a press counts once they are let go
+constexpr UINT_PTR kFfbCaptureTimer = 23;
+constexpr uint32_t kSdlInitJoystick = 0x00000200;
+
+void NameFfbGainRows() {
+  for (int k = 0; k < 2; ++k) {
+    if (g_ffb_gain_row[k] < 0) continue;
+    const std::wstring name = k ? L"FFB gain \x2212" : L"FFB gain +";
+    g_c[size_t(g_ffb_gain_row[k])].items[0] =
+        g_ffb_capture == k            ? L"Press the wheel button for " + name + L"   (Esc: cancel, Delete: none)"
+        : g_ffb_gain_button[k] >= 0 ? name + L":  wheel button " + std::to_wstring(g_ffb_gain_button[k])
+                                    : name + L":  not set (click, then press a wheel button)";
+  }
+}
+// wheel_button = <n>, ffb_gain_up / ffb_gain_down
+bool FfbGainLine(const std::string& line, int* button, int* which) {
+  int n = -1;
+  char what[32] = "";
+  if (sscanf(line.c_str(), " wheel_button = %d , %31s", &n, what) != 2 || n < 0) return false;
+  for (int k = 0; k < 2; ++k) {
+    if (_stricmp(what, kFfbGainAction[k]) == 0) {
+      *button = n;
+      *which = k;
+      return true;
+    }
+  }
+  return false;
+}
+void LoadFfbGainButtons() {
+  g_ffb_gain_button[0] = g_ffb_gain_button[1] = -1;
+  for (const auto& l : ReadLines(WheelIniPath())) {
+    int n, k;
+    if (FfbGainLine(l, &n, &k)) g_ffb_gain_button[k] = n;
+  }
+  NameFfbGainRows();
+}
+// The two lines in default.ini after its other wheel_button lines, as WheelSetup writes them.
+bool SaveFfbGainButtons() {
+  std::ifstream in(WheelIniPath().c_str(), std::ios::binary);
+  if (!in) return false;
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  const std::string nl = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+  std::vector<std::string> lines;
+  int last_button = -1;
+  for (const auto& l : ReadLines(WheelIniPath())) {
+    int n, k;
+    if (FfbGainLine(l, &n, &k)) continue;
+    lines.push_back(l);
+    if (sscanf(l.c_str(), " wheel_button = %d", &n) == 1) last_button = int(lines.size()) - 1;
+  }
+  std::vector<std::string> add;
+  for (int k = 0; k < 2; ++k) {
+    if (g_ffb_gain_button[k] >= 0) add.push_back("wheel_button = " + std::to_string(g_ffb_gain_button[k]) + ", " + kFfbGainAction[k]);
+  }
+  lines.insert(last_button >= 0 ? lines.begin() + last_button + 1 : lines.end(), add.begin(), add.end());
+  CopyFileW(WheelIniPath().c_str(), (WheelIniPath() + L".launcher-backup").c_str(), FALSE);
+  std::ofstream out(WheelIniPath().c_str(), std::ios::binary | std::ios::trunc);
+  if (!out) return false;
+  for (const auto& l : lines) out << l << nl;
+  return bool(out);
+}
+// The wheel the game reads: wheel_device from default.ini without its " @..." part, lower case; empty for auto.
+std::string FfbWheelName() {
+  std::string name;
+  for (std::string l : ReadLines(WheelIniPath())) {
+    const size_t hash = l.find('#');
+    if (hash != std::string::npos) l.resize(hash);
+    const size_t s = l.find_first_not_of(" \t"), eq = l.find('=');
+    if (s == std::string::npos || eq == std::string::npos || l.compare(s, 12, "wheel_device") != 0) continue;
+    name = l.substr(eq + 1);
+  }
+  const size_t at = name.find(" @");
+  if (at != std::string::npos) name.resize(at);
+  name.erase(0, name.find_first_not_of(" \t"));
+  while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) name.pop_back();
+  for (char& ch : name) ch = char(tolower((unsigned char)ch));
+  return name == "auto" ? std::string() : name;
+}
+void StopFfbCapture(HWND h) {
+  KillTimer(h, kFfbCaptureTimer);
+  for (void* j : g_ffb_capture_joys) g_joy.CloseJoystick(j);
+  g_ffb_capture_joys.clear();
+  g_ffb_capture_held.clear();
+  g_ffb_capture = -1;
+  NameFfbGainRows();
+}
+void StartFfbCapture(HWND h, int k) {
+  const bool again = g_ffb_capture == k;
+  if (g_ffb_capture >= 0) StopFfbCapture(h);
+  if (again) return;  // a second click cancels
+  g_status_sticky = true;
+  if (!WheelIniReady()) {
+    g_status = L"Start the game once with the wheel connected: it writes the wheel settings these buttons go into.";
+    g_status_color = kWarn;
+    return;
+  }
+  if (!LoadSdlJoysticks()) {
+    g_status = L"SDL3.dll was not found in the runtime folder, so the launcher cannot read the wheel.";
+    g_status_color = kBad;
+    return;
+  }
+  if (!(g_joy.WasInit(kSdlInitJoystick) & kSdlInitJoystick)) g_joy.InitSubSystem(kSdlInitJoystick);
+  const std::string want = FfbWheelName();
+  int count = 0;
+  uint32_t* ids = g_joy.GetJoysticks(&count);
+  for (int i = 0; i < count; ++i) {
+    void* j = g_joy.OpenJoystick(ids[i]);
+    if (!j) continue;
+    std::string name = g_joy.GetJoystickName(j) ? g_joy.GetJoystickName(j) : "";
+    for (char& ch : name) ch = char(tolower((unsigned char)ch));
+    if (!want.empty() && name.find(want) == std::string::npos) {
+      g_joy.CloseJoystick(j);  // the game reads the buttons of the wheel only
+      continue;
+    }
+    g_ffb_capture_joys.push_back(j);
+  }
+  if (ids) g_joy.Free(ids);
+  if (g_ffb_capture_joys.empty()) {
+    g_status = L"The wheel was not found: connect it, or choose it in Wheel Setup.";
+    g_status_color = kWarn;
+    return;
+  }
+  g_joy.UpdateJoysticks();
+  for (void* j : g_ffb_capture_joys) {
+    std::vector<char> held(size_t((std::max)(0, g_joy.GetNumJoystickButtons(j))));
+    for (size_t b = 0; b < held.size(); ++b) held[b] = g_joy.GetJoystickButton(j, int(b)) ? 1 : 0;
+    g_ffb_capture_held.push_back(std::move(held));
+  }
+  g_ffb_capture = k;
+  g_status.clear();
+  NameFfbGainRows();
+  SetTimer(h, kFfbCaptureTimer, 30, nullptr);
+  LauncherLog("FFB gain button: waiting on " + std::to_string(g_ffb_capture_joys.size()) + " controller(s) of the wheel");
+}
+void SetFfbGainButton(HWND h, int k, int button) {
+  g_ffb_gain_button[k] = button;
+  if (button >= 0 && g_ffb_gain_button[1 - k] == button) g_ffb_gain_button[1 - k] = -1;  // one action a button
+  const bool saved = SaveFfbGainButtons();
+  StopFfbCapture(h);
+  const std::wstring name = k ? L"FFB gain \x2212" : L"FFB gain +";
+  g_status = !saved      ? L"Could not save the wheel buttons to default.ini."
+             : button >= 0 ? name + L" is wheel button " + std::to_wstring(button) + L" (from the next start of the game)."
+                           : name + L" has no button now.";
+  g_status_color = saved ? kOk : kBad;
+  g_status_sticky = true;
+}
+void PollFfbCapture(HWND h) {
+  if (g_ffb_capture < 0) return;
+  g_joy.UpdateJoysticks();
+  for (size_t a = 0; a < g_ffb_capture_joys.size(); ++a) {
+    auto& held = g_ffb_capture_held[a];
+    for (size_t b = 0; b < held.size(); ++b) {
+      const bool down = g_joy.GetJoystickButton(g_ffb_capture_joys[a], int(b));
+      if (down && !held[b]) {
+        SetFfbGainButton(h, g_ffb_capture, int(b));
+        InvalidateRect(h, nullptr, FALSE);
+        return;
+      }
+      if (!down) held[b] = 0;
+    }
+  }
 }
 
 void BuildModel() {
@@ -680,8 +940,8 @@ void BuildModel() {
   };
   g_preset = seg(L"Performance preset",
                  L"Picks the render and output sizes for your PC. Lower the preset if the game is slow; "
-                 L"you can still change each size below.",
-                 {L"Custom", L"Handheld", L"Low", L"Medium", L"High", L"Ultra"}, {"@preset", "", "", "", "", ""}, 0);
+                 L"you can still change each size below. PS4 restores 30 FPS, native 1080p, the game's anti-aliasing and original graphics effects, without changing core compatibility fixes.",
+                 {L"Custom", L"Handheld", L"Low", L"Medium", L"High", L"Ultra", L"PS4"}, {"@preset", "", "", "", "", "", ""}, 0);
   const int fps = (g_fps = int(g_c.size()), seg(L"Frame rate",
                       L"60 FPS (deltatime) scales the game by elapsed time, so speed stays right if the frame rate dips. "
                       L"Unlocked (VRR) uses the same timing up to your display's refresh rate: the game runs as fast as your PC allows, the speed stays right, "
@@ -727,8 +987,8 @@ void BuildModel() {
                        00));
   const int fov = toggle(L"Widescreen field-of-view fix", L"For wide and ultrawide resolutions only.",
                          "FOV fix for wide resolutions", false);
-  const int camera_patch = toggle(L"High-FPS camera workaround (experimental)",
-      L"Reduces camera, replay HUD and driver shake above 30 FPS. Behavior is still incorrect in some situations and does not match the 30 FPS reference. Enabled by default; restart the game after changing it.",
+  const int camera_patch = g_camera_patch_row = toggle(L"Camera/replay shake workaround",
+      L"Temporary, experimental high-FPS workaround. Auto-enabled for 60 FPS delta time/VRR; off for PS4/30 FPS. Manual opt-out persists until the FPS mode changes. Disable once native timing is fixed. Requires a compatible runtime.",
       "@camera_patch", true);
   const int blur = g_blur_patch = toggle(L"Disable motion blur and depth of field",
                           L"They share one shader, so both are turned off together. Cannot be changed while FSR or DLSS anti-aliasing is on: they need the game's blur pass.",
@@ -810,6 +1070,10 @@ void BuildModel() {
     g_c.push_back(std::move(c));
   }
   const int showfps = toggle(L"Show FPS counter", L"Draws the frame rate in the top right corner while playing.", "@fps", false);
+  const int showpedals = toggle(L"Show pedal inputs",
+                                L"Draws how far the clutch, brake and throttle are pressed, in the bottom left corner while "
+                                L"playing, so you can see a pedal reach 100%. F2 turns it on and off in the game.",
+                                "@pedals", false);
   const int full = toggle(L"Fullscreen", L"Plays borderless fullscreen. Turn off for a window.", "@full", true);
   const int unlock = toggle(L"Unlock DLC content",
                             L"Unlocks the DLC content: add-on cars, bikes, tours and livery decals. Cars you earn by playing still unlock through normal progression. Built from your own game files; the game folders are not modified.",
@@ -897,8 +1161,8 @@ void BuildModel() {
   g_c.push_back(Ctl{L"Controls", L"Set up your wheel, pedals, handbrake and shifter. Click Map next to a control, then move it.",
                     Kind::Button, {L"Wheel Setup..."}, {"@wheelsetup"}, 0, 0});
   g_ffb_model = seg(L"Force feedback",
-                    L"How the wheel's force is made. Reworked Physics feels like a real car and a racing sim. Original Physics is the PS4 game's own feel.",
-                    {L"Reworked Physics", L"Original Physics"}, {"@ffb:wheel_ffb_model", ""}, 1);
+                    L"How the wheel's force is made. Reworked Physics comes from the car's tyres, like a racing sim, and is the one for wheels. Original Physics is the PS4 game's own feel, not recommended for wheels.",
+                    {L"Reworked Physics", L"Original (not recommended)"}, {"@ffb:wheel_ffb_model", ""}, 1);
   g_ffb_preset = seg(L"Preset", L"Ready-made settings for your type of wheel. You can fine-tune the sliders below afterwards.",
                      {L"Direct drive", L"Gear or belt"}, {"@wheelpreset", ""}, -1);
   g_c[g_ffb_preset].physics_only = true;
@@ -930,31 +1194,48 @@ void BuildModel() {
   g_ffb_wave = seg(L"Vibration wave", L"The feel of vibrations: Sine is smooth, Square is sharper.",
                    {L"Sine", L"Square"}, {"@ffb:wheel_ffb_vibration_wave", ""}, 1);
   const int ffb_invert = toggle(L"Invert forces", L"Turn on only if the wheel pulls away from the centre instead of towards it.", "@ffb:wheel_ffb_invert", false);
+  // FFB gain + / -: two wheel buttons (NameFfbGainRows writes their text)
+  for (int k = 0; k < 2; ++k) {
+    g_ffb_gain_row[k] = int(g_c.size());
+    Ctl c{k ? L"FFB gain \x2212" : L"FFB gain +",
+          L"A button on your wheel that makes the force of the car you are driving 5% stronger (or weaker) during a race. Each car keeps its own. Click, then press the button on the wheel.",
+          Kind::Button, {L""}, {k ? "@ffbgaindown" : "@ffbgainup"}, 0, 0};
+    c.physics_only = true;
+    g_c.push_back(std::move(c));
+  }
+  NameFfbGainRows();
   // The cards flow into as many columns as the window width allows (see LayoutPass), on the page of their tab.
-  g_cards.push_back({L"FRAME RATE AND RESOLUTION", {g_preset, fps, g_fps_cap, outres, inres, wide, fov, twothread}, 0, kTabGraphics});
+  g_cards.push_back({L"FRAME RATE", {g_preset, fps, g_fps_cap}, 0, kTabGraphics});
+  if (g_fgen >= 0) g_cards.back().ctls.push_back(g_fgen);
+  g_cards.push_back({L"RESOLUTION AND WINDOW", {outres, inres, wide, g_gfx[kGfxDynres], full}, 0, kTabGraphics});
   g_cards.push_back({L"ANTI-ALIASING", {g_aa, g_up, g_sharp, g_aniso}, 0, kTabGraphics});
   g_cards.push_back({L"HDR", {g_hdr, g_hdr_paper, g_hdr_peak}, 0, kTabGraphics});
-  g_cards.push_back({L"GRAPHICS DETAIL",
-                     {g_gfx[kGfxCar], g_gfx[kGfxOpp], g_gfx[kGfxScenery], g_gfx[kGfxSsr], g_gfx[kGfxShadows],
-                      g_gfx[kGfxParticles], g_gfx[kGfxDynres]},
-                     0, kTabDetail});
-  g_cards.push_back({L"EFFECTS", {g_gfx[kGfxBlur], g_motion_blur, g_gfx[kGfxDust], g_gfx[kGfxHaze], g_gfx[kGfxFxaa]}, 0, kTabDetail,
-                     L"The game's own camera effects, each on as on PS4."});
-  g_cards.push_back({L"GAMEPLAY", {pname, g_lang, g_mirror, full, unlock, showfps, overlays, autoplay, updatecheck}, 0, kTabGameplay});
+  g_cards.push_back({L"SCENE DETAIL", {g_gfx[kGfxCar], g_gfx[kGfxOpp], g_gfx[kGfxScenery],
+                                      g_gfx[kGfxShadows], g_gfx[kGfxParticles]}, 0, kTabDetail});
+  g_cards.push_back({L"REFLECTIONS", {g_gfx[kGfxSsr], g_mirror}, 0, kTabDetail});
+  g_cards.push_back({L"CAMERA EFFECTS", {g_gfx[kGfxBlur], g_motion_blur, g_gfx[kGfxDust], g_gfx[kGfxHaze], g_gfx[kGfxFxaa]}, 0, kTabDetail});
+  g_cards.push_back({L"PLAYER", {pname, g_lang}, 0, kTabGameplay});
+  g_cards.push_back({L"CONTENT", {unlock}, 0, kTabGameplay});
+  g_cards.push_back({L"STARTUP AND OVERLAYS", {showfps, showpedals, overlays, autoplay, updatecheck}, 0, kTabGameplay});
   g_cards.push_back({L"VIEW AND KEYS", {g_fov}, 0, kTabDriving,
-                     L"Keys while playing:  F5 / F6  narrower / wider view.   F7  mouse look on or off.   F9  the new anti-aliasing on or off (not while upscaling).   F10  FSR or DLSS.   F12  FPS counter.   Page Up / Page Down  HDR brightness."});
+                     L"F2: pedal inputs. F5 / F6: field of view. F7: mouse look. F9 / F10: anti-aliasing. F12: performance overlay. Page Up / Page Down: HDR brightness."});
   g_cards.back().sub = kSubAssists;
   g_cards.push_back({L"ASSISTS", {g_drive_preset, g_drive[0].row, g_drive[1].row, g_drive[2].row, g_drive[3].row}, 0, kTabDriving,
-                     L"In-game: the launcher leaves that setting alone and the game's own Options menu decides. Any other choice is set by the launcher every time the game starts."});
+                     L"In-game leaves the setting to the game's Options menu. Other choices are applied when the game starts."});
   g_cards.back().sub = kSubAssists;
-  g_cards.push_back({L"PATCHES", {camera_patch, blur, reset, barrier, pcol, pproc, skipgpu}, 0, kTabGameplay,
-                     L"Community patches for DriveClub version 1.28."});
+  g_cards.push_back({L"TEMPORARY WORKAROUNDS", {camera_patch}, 0, kTabPatches,
+                     L"Optional workaround for high-FPS shake. Not needed at 30 FPS. Disable it if your runtime already corrects camera/replay timing."});
+  g_cards.push_back({L"DISPLAY COMPATIBILITY", {fov}, 0, kTabPatches});
+  g_cards.push_back({L"GAMEPLAY PATCHES", {reset, barrier}, 0, kTabPatches});
+  g_cards.push_back({L"PHOTO MODE", {pcol, pproc}, 0, kTabPatches});
+  g_cards.push_back({L"EFFECT OVERRIDES", {blur}, 0, kTabPatches});
+  g_cards.push_back({L"ADVANCED", {twothread, skipgpu}, 0, kTabGameplay});
   g_cards.push_back({L"BENCHMARK", {g_btrack, g_bcar, g_bmode, g_btod, g_bweather, g_brain, g_blen}, 0, kTabBench});
   g_cards.push_back({L"BENCHMARK RUN AND RESULT", {g_brun}, 0, kTabBench});
   // The details each (i) opens, after the row's hint.
   const struct { const wchar_t* label; const wchar_t* more; } kMore[] = {
       {L"Widescreen (render and output)", L"Leave Output resolution and Render resolution on Default when you use a widescreen size: the widescreen size sets both, and other sizes there crop the picture. Choosing a widescreen size puts them back on Default for you."},
-      {L"Force feedback", L"Reworked Physics is recommended for every wheel. The wheel gets heavier in fast corners, goes light when the front tyres lose grip (the car runs wide), and turns itself the right way when the back of the car slides, like in Assetto Corsa. It learns each car as you drive. Original Physics gives the forces the PS4 game made."},
+      {L"Force feedback", L"Reworked Physics is recommended for every wheel. The wheel gets heavier in fast corners, goes light when the front tyres lose grip (the car runs wide), and turns itself the right way when the back of the car slides, like in Assetto Corsa. It learns each car as you drive. Original Physics gives the forces the PS4 game made for Logitech wheels in 2014: a spring that follows the car, without the tyres' grip. It is not recommended for wheels."},
       {L"Preset", L"Direct drive: wheels with the motor on the steering shaft (for example Fanatec DD, Moza, Simagic, Simucube). Gear or belt: most Logitech, Thrustmaster and Fanatec CSL or ClubSport belt wheels. A preset only moves the sliders below."},
       {L"Gain", L"Too weak and the car feels vague; too strong and the wheel hits its limit in fast corners, where it feels flat and you lose the detail. Start at 100 on a strong wheel; weaker wheels may want 150 to 200."},
       {L"Filter", L"Leave it at 0. If the wheel feels grainy or rattles, try 10 to 20."},
@@ -983,7 +1264,8 @@ void BuildModel() {
   g_cards.push_back({L"CONTROLS", {g_wheel_setup, ffb_invert}, 0, kTabDriving,
                      L"Wheel Setup shows every controller plugged in. Click Map next to a control (steering, pedals, handbrake, buttons, gears), then move it."});
   g_cards.back().sub = kSubWheel;
-  g_cards.push_back({L"FORCE FEEDBACK", {g_ffb_model, g_ffb_preset, g_ffb_slider[0], g_ffb_slider[1], g_ffb_slider[2], g_ffb_slider[6], g_ffb_softlock}, 0, kTabDriving});
+  g_cards.push_back({L"FORCE FEEDBACK", {g_ffb_model, g_ffb_preset, g_ffb_slider[0], g_ffb_slider[1], g_ffb_slider[2], g_ffb_slider[6], g_ffb_softlock,
+                                         g_ffb_gain_row[0], g_ffb_gain_row[1]}, 0, kTabDriving});
   g_cards.back().sub = kSubWheel;
   g_cards.push_back({L"EFFECTS", {g_ffb_slider[3], g_ffb_slider[4], g_ffb_slider[5], g_ffb_wave}, 0, kTabDriving});
   g_cards.back().sub = kSubWheel;
@@ -1007,7 +1289,7 @@ std::wstring BenchName(const BenchChoice* list, int count, const std::string& id
   return i >= 0 ? std::wstring(list[i].name) : Widen(id);
 }
 
-bool fps_counter = false, fast_render = false, full_screen = true, unlock_dlc = false;  // the settings that are not patches
+bool fps_counter = false, pedal_display = false, fast_render = false, full_screen = true, unlock_dlc = false;  // the settings that are not patches
 
 // Output / render choices per preset: indices into the "Output resolution" and "Render resolution" rows,
 // and the "Mirror and reflection updates" choice (slower presets update the mirrors less often).
@@ -1015,22 +1297,57 @@ const int kPresetOut[6] = {0, 1, 0, 2, 4, 4};     // Default 720p 1440p 1800p 4K
 const int kPresetIn[6] = {0, 1, 1, 0, 2, 4};      // Default(1080p) 720p 1440p 1800p 4K 8K
 const int kPresetMirror[6] = {0, 1, 0, 0, 0, 0};  // Live, Static (Handheld takes the speed)
 
+// Temporary compatibility policy: verify the native correction without this
+// workaround, then retire its auto-enable and UI entry. Do not stack a known
+// corrected native path with the workaround or infer correctness from version.
+bool FrameModeNeedsCameraPatch() {
+  return g_fps>=0 && (g_c[g_fps].sel==1 || g_c[g_fps].sel==3);
+}
+void ApplyFrameModeCameraDefault() {
+  if(g_camera_patch_row>=0)g_c[g_camera_patch_row].sel=FrameModeNeedsCameraPatch()?1:0;
+}
+constexpr int kPs4Preset = 6;
+std::vector<std::pair<int, int>> Ps4Profile() {
+  std::vector<std::pair<int,int>> values = {{g_fps,0},{g_outres,0},{g_inres,0},{g_wide,0},
+      {g_aa,0},{g_up,0},{g_aniso,1},{g_mirror,0},{g_hdr,0},{g_fgen,0},
+      {g_motion_blur,0},{g_fov,100},{g_camera_patch_row,0}};
+  for (int i=0;i<kGfxRows;++i) if(g_gfx[i]>=0) values.emplace_back(g_gfx[i],g_c[g_gfx[i]].def);
+  for(size_t i=0;i<g_c.size();++i) {
+    const auto& tag=g_c[i].patches[0];
+    if(tag=="FOV fix for wide resolutions" || tag=="Disable motion blur and depth of field" ||
+       tag=="Reset Disable" || tag=="Barrier Disable" || tag=="Disable Photomode Free Camera Collision" ||
+       tag=="Disable Photomode Processing") values.emplace_back(int(i),0);
+  }
+  return values;
+}
+bool IsPs4Profile() {
+  for(const auto& [id,value]:Ps4Profile()) if(id>=0 && g_c[id].sel!=value) return false;
+  return true;
+}
+
 // The preset row has no patch of its own: it shows the preset whose sizes are selected, else Custom.
 void DerivePreset() {
   if (g_preset < 0 || g_outres < 0 || g_inres < 0) return;
   g_c[g_preset].sel = 0;
+  if (IsPs4Profile()) { g_c[g_preset].sel=kPs4Preset; return; }
   if (g_wide >= 0 && g_c[g_wide].sel != 0) return;
   for (int p = 1; p <= 5; ++p) {
     if (g_c[g_outres].sel == kPresetOut[p] && g_c[g_inres].sel == kPresetIn[p]) g_c[g_preset].sel = p;
   }
 }
 
+bool ReadOptimizationMask(uint64_t& mask) {
+  std::ifstream in((g_data+L"\\user\\toggles.txt").c_str());
+  if(!(in>>mask)) return false;
+  in>>std::ws; return in.eof();
+}
 void LoadSettings() {
   g_two_thread = !PrimaryGpuIsAmd();  // the saved choice (draw_threads=) replaces it below
   for (const auto& line : ReadLines(IniPath())) {
     if (line.rfind("update=", 0) == 0) g_folder[0].path = Widen(line.substr(7));
     if (line.rfind("base=", 0) == 0) g_folder[1].path = Widen(line.substr(5));
     if (line.rfind("fps=", 0) == 0) fps_counter = line.substr(4) == "1";
+    if (line.rfind("pedals=", 0) == 0) pedal_display = line.substr(7) == "1";
     if (line.rfind("fast=", 0) == 0) fast_render = line.substr(5) == "1";
     if (line.rfind("name=", 0) == 0) g_name = Widen(line.substr(5));
     if (line.rfind("mirror=", 0) == 0) mirror_saved = atoi(line.substr(7).c_str());
@@ -1042,7 +1359,7 @@ void LoadSettings() {
     if (line.rfind("aa=", 0) == 0) aa_saved = atoi(line.substr(3).c_str());
     if (line.rfind("fgen=", 0) == 0) fgen_saved = atoi(line.substr(5).c_str());
     if (line.rfind("unlocked=", 0) == 0) unlocked_saved = line.substr(9) == "1";
-    if (line.rfind("camera_patch=", 0) == 0) g_camera_patch = line.substr(13) == "1";
+    if (line.rfind("camera_patch=",0)==0) { g_camera_patch=line.substr(13)=="1";g_camera_patch_saved=true; }
     if (line.rfind("skip_gpu_check=", 0) == 0) g_skip_gpu_check = line.substr(15) == "1";
     if (line.rfind("overlays=", 0) == 0) g_allow_overlays = line.substr(9) == "1";
     if (line.rfind("draw_threads=", 0) == 0) g_two_thread = line.substr(13) == "1";
@@ -1075,6 +1392,8 @@ void LoadSettings() {
       if (v >= 0 && v < int(g_c[b.row].items.size())) g_c[b.row].sel = v;
     }
   }
+  uint64_t existing_mask=0;
+  if(ReadOptimizationMask(existing_mask)) g_two_thread=(existing_mask & (1ull<<37))==0;
   ShowBenchChoices();
   for (auto& c : g_c) if (c.patches[0] == "@name") c.items[0] = g_name;
   CheckFolders();
@@ -1083,6 +1402,10 @@ void LoadSettings() {
   for (auto& c : g_c) {
     if (c.kind == Kind::Toggle && c.patches[0] == "@fps") {
       c.sel = fps_counter ? 1 : 0;
+      continue;
+    }
+    if (c.kind == Kind::Toggle && c.patches[0] == "@pedals") {
+      c.sel = pedal_display ? 1 : 0;
       continue;
     }
     if (c.kind == Kind::Toggle && c.patches[0] == "@fast") {
@@ -1105,10 +1428,7 @@ void LoadSettings() {
       c.sel = g_check_updates ? 1 : 0;
       continue;
     }
-    if (c.kind == Kind::Toggle && c.patches[0] == "@camera_patch") {
-      c.sel = g_camera_patch ? 1 : 0;
-      continue;
-    }
+    if (c.kind == Kind::Toggle && c.patches[0] == "@camera_patch") { c.sel=g_camera_patch?1:0; continue; }
     if (c.kind == Kind::Toggle && c.patches[0] == "@skipgpu") {
       c.sel = g_skip_gpu_check ? 1 : 0;
       continue;
@@ -1163,14 +1483,16 @@ void LoadSettings() {
   if (g_motion_blur >= 0) g_c[g_motion_blur].sel = motion_blur_saved;
   if (g_fps >= 0 && unlocked_saved && g_c[g_fps].sel == 1) g_c[g_fps].sel = 3;  // Unlocked is deltatime without the cap
   NameNativeUpscale();
-  DerivePreset();
+  if(!g_camera_patch_saved)ApplyFrameModeCameraDefault();
   LoadWheel();
+  LoadFfbGainButtons();
   DeriveDrivePreset();
   if (g_fov >= 0) {
     for (const auto& line : ReadLines(CameraIniPath())) {
       if (line.rfind("fov=", 0) == 0) g_c[g_fov].sel = (std::clamp)(atoi(line.substr(4).c_str()), g_c[g_fov].min, g_c[g_fov].max);
     }
   }
+  DerivePreset();
 }
 
 // Resolutions above 1080p need more memory: the game's own "Memory for up to ..." patch plus a larger
@@ -1213,6 +1535,10 @@ int MemoryTier() { return (std::max)(RenderMemoryTier(), OutputMemoryTier()); }
 
 // Output / render choices per preset: indices into the "Output resolution" and "Render resolution" rows.
 void ApplyPreset(int preset) {
+  if(preset==kPs4Preset) {
+    for(const auto& [id,value]:Ps4Profile()) if(id>=0) g_c[id].sel=value;
+    NameNativeUpscale(); return;
+  }
   if (preset <= 0 || preset > 5 || g_outres < 0 || g_inres < 0) return;
   g_c[g_outres].sel = kPresetOut[preset];
   g_c[g_inres].sel = kPresetIn[preset];
@@ -1220,14 +1546,48 @@ void ApplyPreset(int preset) {
   if (g_mirror >= 0) g_c[g_mirror].sel = kPresetMirror[preset];
 }
 
-void SaveSettings() {
+bool SaveTextAtomically(const std::wstring& path,const std::string& text) {
+  const auto temp=path+L".launcher-"+std::to_wstring(GetCurrentProcessId())+L".tmp";
+  { std::ofstream out(temp.c_str(),std::ios::binary|std::ios::trunc);
+    if(out) { out<<text; out.flush(); }
+    if(!out) { DeleteFileW(temp.c_str()); g_settings_error=L"Could not write settings; the previous file was retained."; return false; }
+  }
+  if(!MoveFileExW(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)) {
+    DeleteFileW(temp.c_str());g_settings_error=L"Could not replace settings; the previous file was retained.";return false;
+  }
+  return true;
+}
+std::string PreserveUnmanagedIni(const std::vector<std::string>& old,const std::string& managed,bool launcher=false) {
+  std::vector<std::string> keys; std::istringstream values(managed);std::string line;
+  while(std::getline(values,line)) { const auto at=line.find('=');if(at!=std::string::npos)keys.push_back(line.substr(0,at)); }
+  std::string result=managed;
+  for(const auto& previous:old) {
+    const auto at=previous.find('=');
+    if(at!=std::string::npos && std::find(keys.begin(),keys.end(),previous.substr(0,at))!=keys.end()) continue;
+    if(launcher && IsPendingWheelSetting(previous)) continue;
+    result+=previous+"\r\n";
+  }
+  return result;
+}
+bool SaveIniValue(const std::wstring& path,const std::string& key,const std::string& value) {
+  return SaveTextAtomically(path,PreserveUnmanagedIni(ReadLines(path),key+"="+value+"\r\n"));
+}
+bool SaveSettings() {
   MakeDirs(g_data + L"\\user");
+  g_settings_error.clear();
+  uint64_t saved_mask=2199023792128ull;
+  const auto toggles=g_data+L"\\user\\toggles.txt";
+  if(Exists(toggles) && !ReadOptimizationMask(saved_mask)) {
+    g_settings_error=L"The existing optimization mask is invalid; settings were not changed.";return false;
+  }
+  const auto old_ini=ReadLines(IniPath());
+  const auto old_patches=ReadLines(SelectionPath());
   {
-    std::ofstream ini(IniPath().c_str(), std::ios::binary | std::ios::trunc);
-    bool fps_on = false, fast_on = false, full_on = true, unlock_on = false;
+    std::ostringstream ini;
+    bool fps_on = false, pedals_on = false, fast_on = fast_render, full_on = true, unlock_on = false;
     for (const auto& c : g_c) {
-      if (c.kind == Kind::Toggle && c.patches[0] == "@camera_patch") g_camera_patch = c.sel != 0;
       if (c.kind == Kind::Toggle && c.patches[0] == "@fps") fps_on = c.sel != 0;
+      if (c.kind == Kind::Toggle && c.patches[0] == "@pedals") pedals_on = c.sel != 0;
       if (c.kind == Kind::Toggle && c.patches[0] == "@fast") fast_on = c.sel != 0;
       if (c.kind == Kind::Toggle && c.patches[0] == "@full") full_on = c.sel != 0;
       if (c.kind == Kind::Toggle && c.patches[0] == "@unlock") unlock_on = c.sel != 0;
@@ -1237,11 +1597,12 @@ void SaveSettings() {
       if (c.kind == Kind::Toggle && c.patches[0] == "@updatecheck") g_check_updates = c.sel != 0;
     }
     ini << "update=" << Narrow(g_folder[0].path) << "\r\nbase=" << Narrow(g_folder[1].path) << "\r\nfps=" << (fps_on ? 1 : 0)
-        << "\r\nfast=" << (fast_on ? 1 : 0) << "\r\nunlocked=" << ((g_fps >= 0 && g_c[g_fps].sel == 3) ? 1 : 0) << "\r\nskip_gpu_check=" << (g_skip_gpu_check ? 1 : 0) << "\r\nmirror=" << (g_mirror >= 0 ? g_c[g_mirror].sel : 0) << "\r\nlanguage=" << g_lang_id << "\r\naniso=" << (g_aniso >= 0 ? g_c[g_aniso].sel : 0) << "\r\nup=" << (g_up >= 0 ? g_c[g_up].sel : 0) << "\r\nsharpness=" << (g_sharp >= 0 ? g_c[g_sharp].sel : 80) << "\r\nfps_cap=" << (g_fps_cap >= 0 && g_c[g_fps_cap].sel < g_c[g_fps_cap].max ? g_c[g_fps_cap].sel : 0) <<"\r\nhdr=" << (g_hdr >= 0 ? g_c[g_hdr].sel : 0) << "\r\nhdr_paper=" << (g_hdr_paper >= 0 ? g_c[g_hdr_paper].sel : 350) << "\r\nhdr_peak=" << (g_hdr_peak >= 0 ? g_c[g_hdr_peak].sel : 1000) << "\r\naa=" << (g_aa >= 0 ? g_c[g_aa].sel : 0) << "\r\nfgen=" << (g_fgen >= 0 ? g_c[g_fgen].sel : 0) <<"\r\nname=" << Narrow(g_name) <<"\r\nfull=" << (full_on ? 1 : 0) << "\r\ndlc_unlock=" << (unlock_on ? 1 : 0) << "\r\noverlays=" << (g_allow_overlays ? 1 : 0) << "\r\nauto_play=" << (g_auto_play ? 1 : 0) << "\r\ncheck_updates=" << (g_check_updates ? 1 : 0) << "\r\ndraw_threads=" << (g_two_thread ? 1 : 0) << "\r\n";
+        << "\r\nfast=" << (fast_on ? 1 : 0) << "\r\nunlocked=" << ((g_fps >= 0 && g_c[g_fps].sel == 3) ? 1 : 0) << "\r\nskip_gpu_check=" << (g_skip_gpu_check ? 1 : 0) << "\r\nmirror=" << (g_mirror >= 0 ? g_c[g_mirror].sel : 0) << "\r\nlanguage=" << g_lang_id << "\r\naniso=" << (g_aniso >= 0 ? g_c[g_aniso].sel : 0) << "\r\nup=" << (g_up >= 0 ? g_c[g_up].sel : 0) << "\r\nsharpness=" << (g_sharp >= 0 ? g_c[g_sharp].sel : 80) << "\r\nfps_cap=" << (g_fps_cap >= 0 && g_c[g_fps_cap].sel < g_c[g_fps_cap].max ? g_c[g_fps_cap].sel : 0) <<"\r\nhdr=" << (g_hdr >= 0 ? g_c[g_hdr].sel : 0) << "\r\nhdr_paper=" << (g_hdr_paper >= 0 ? g_c[g_hdr_paper].sel : 350) << "\r\nhdr_peak=" << (g_hdr_peak >= 0 ? g_c[g_hdr_peak].sel : 1000) << "\r\naa=" << (g_aa >= 0 ? g_c[g_aa].sel : 0) << "\r\nfgen=" << (g_fgen >= 0 ? g_c[g_fgen].sel : fgen_saved) <<"\r\nname=" << Narrow(g_name) <<"\r\nfull=" << (full_on ? 1 : 0) << "\r\ndlc_unlock=" << (unlock_on ? 1 : 0) << "\r\noverlays=" << (g_allow_overlays ? 1 : 0) << "\r\nauto_play=" << (g_auto_play ? 1 : 0) << "\r\ncheck_updates=" << (g_check_updates ? 1 : 0) << "\r\ndraw_threads=" << (g_two_thread ? 1 : 0) << "\r\n";
     for (int k = 0; k < kGfxRows; ++k) {
       if (g_gfx[k] >= 0) ini << kGfxKey[k] << g_c[g_gfx[k]].sel << "\r\n";
     }
-    ini << "camera_patch=" << (g_camera_patch ? 1 : 0) << "\r\n";
+    ini << "pedals=" << (pedals_on ? 1 : 0) << "\r\n";
+    ini << "camera_patch=" << (g_c[g_camera_patch_row].sel ? 1 : 0) << "\r\n";
     ini << "motion_blur=" << (g_c[g_motion_blur].sel == 1 ? "fast" : "slow") << "\r\n";
     ini << "bench_track=" << kBenchTracks[g_bench_track].id << "\r\nbench_car=" << kBenchCars[g_bench_car].id
         << "\r\nbench_mode=" << g_c[g_bmode].sel << "\r\nbench_tod=" << g_c[g_btod].sel << "\r\nbench_weather=" << g_c[g_bweather].sel
@@ -1249,25 +1610,22 @@ void SaveSettings() {
     for (const auto& d : g_drive) if (d.row >= 0) ini << d.key << g_c[d.row].sel << "\r\n";
     // Only when moved here: the game may have saved a newer one since this window read it.
     if (g_hdr_paper >= 0 && g_c[g_hdr_paper].sel != g_c[g_hdr_paper].loaded) {
-      std::ofstream hdr_ini(HdrIniPath().c_str(), std::ios::binary | std::ios::trunc);
-      hdr_ini << "paper=" << g_c[g_hdr_paper].sel << "\r\n";
+      if(!SaveIniValue(HdrIniPath(),"paper",std::to_string(g_c[g_hdr_paper].sel))) return false;
       g_c[g_hdr_paper].loaded = g_c[g_hdr_paper].sel;
     }
     if (g_fov >= 0 && (g_c[g_fov].sel != 100 || Exists(CameraIniPath()))) {
-      std::ofstream cam(CameraIniPath().c_str(), std::ios::binary | std::ios::trunc);
-      cam << "fov=" << g_c[g_fov].sel << "\r\n";
+      if(!SaveIniValue(CameraIniPath(),"fov",std::to_string(g_c[g_fov].sel))) return false;
     }
     ini << SaveWheel();  // into default.ini; before the game has made it, kept here
-    // The renderer optimizations that are switched off, as a bit mask (gpu/shim/bbport_toggles.h): the game's
-    // built-in default (runtime_memory.c), plus bit 37 (the two-thread draw path) when "Two-thread rendering" is off.
-    const std::wstring toggles = g_data + L"\\user\\toggles.txt";
-    std::ofstream tog(toggles.c_str(), std::ios::binary | std::ios::trunc);
-    tog << (g_two_thread ? "2199023792128" : "2336462745600");
-    const std::wstring game_ini = g_data + L"\\user\\driveclub.ini";
-    std::ofstream game(game_ini.c_str(), std::ios::binary | std::ios::trunc);
-    game << "show_fps=" << (fps_on ? 1 : 0) << "\r\n";
+    if(!g_settings_error.empty()) return false;
+    if(!SaveTextAtomically(IniPath(),PreserveUnmanagedIni(old_ini,ini.str(),true))) return false;
+    // This control owns only bit 37. Keep every other saved optimization bit.
+    const uint64_t mask=g_two_thread ? (saved_mask & ~(1ull<<37)) : (saved_mask | (1ull<<37));
+    if(!SaveTextAtomically(toggles,std::to_string(mask))) return false;
+    if(!SaveIniValue(g_data+L"\\user\\driveclub.ini","show_fps",fps_on ? "1" : "0")) return false;
+    if(!SaveIniValue(g_data+L"\\user\\driveclub.ini","show_pedals",pedals_on ? "1" : "0")) return false;
   }
-  std::ofstream out(SelectionPath().c_str(), std::ios::binary | std::ios::trunc);
+  std::ostringstream out;
   for (const auto& c : g_c) {
     if (IsWheelRow(c) || c.kind == Kind::Slider || c.kind == Kind::Button) continue;  // no patches
     if (g_blur_patch >= 0 && &c == &g_c[g_blur_patch] && BlurLocked()) continue;
@@ -1282,7 +1640,13 @@ void SaveSettings() {
   if (MemoryTier() == 1) out << "Memory for up to 1440p\n";
   if (MemoryTier() == 2) out << "Memory for up to 4K\n";
   if (MemoryTier() == 3) out << "Memory for up to 8K\n";
-  g_changed = false;
+  for(const auto& previous:old_patches) {
+    bool managed=previous=="Memory for up to 1440p" || previous=="Memory for up to 4K" || previous=="Memory for up to 8K";
+    for(const auto& c:g_c) for(const auto& patch:c.patches) if(!patch.empty() && patch[0]!='@' && patch==previous) managed=true;
+    if(!managed) out<<previous<<"\n";
+  }
+  if(!SaveTextAtomically(SelectionPath(),out.str())) return false;
+  g_changed = false;return true;
 }
 
 void ResetDefaults() {
@@ -1545,7 +1909,7 @@ void RowLabel(Graphics& g, Ctl& c, int i, const Font& f, const RectF& r) {
   const bool hot = g_hover_info == i || g_info_open == i;
   Pen pen(hot ? kWhite : kMuted, 1.2f * S);
   g.DrawEllipse(&pen, c.info);
-  FontFamily fam(L"Segoe UI");
+  const FontFamily& fam = *UiFamily();
   Font fi(&fam, 10.5f * S, FontStyleBold, UnitPixel);
   Text(g, L"i", fi, RectF(c.info.X, c.info.Y + 0.5f * S, c.info.Width, c.info.Height), hot ? kWhite : kMuted, StringAlignmentCenter);
 }
@@ -1553,7 +1917,7 @@ void RowLabel(Graphics& g, Ctl& c, int i, const Font& f, const RectF& r) {
 // A rounded panel of wrapped text at (x, y) at most `width` wide, kept inside the window; returns its rectangle.
 RectF TextPanel(Graphics& g, const std::wstring& title, const std::wstring& body, float x, float y, float width, int w, int h, bool above) {
   const float S = g_scale, pad = 14 * S;
-  FontFamily fam(L"Segoe UI");
+  const FontFamily& fam = *UiFamily();
   Font ft(&fam, 14 * S, FontStyleBold, UnitPixel), fb(&fam, 13 * S, FontStyleRegular, UnitPixel);
   StringFormat mf;
   RectF tb{}, bb{};
@@ -1598,7 +1962,7 @@ void Paint(HDC hdc, int w, int h) {
   g.SetSmoothingMode(SmoothingModeAntiAlias);
   g.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
   g.Clear(kBg);
-  FontFamily fam(L"Segoe UI");
+  const FontFamily& fam = *UiFamily();
   const float S = g_scale;
   g_oy = ContentOy();
   for (auto& c : g_c) c.info = RectF();  // set again for the rows drawn below
@@ -1627,6 +1991,33 @@ void Paint(HDC hdc, int w, int h) {
     g.FillEllipse(&dot, cr.X + 13 * S, cr.Y + 11 * S, 8 * S, 8 * S);
     Text(g, chip, fSeg, RectF(cr.X + 30 * S, cr.Y, cr.Width - 30 * S, cr.Height), chip_ok ? kOk : kWarn,
          StringAlignmentNear, StringAlignmentCenter, false, false);
+
+    // The Discord button, left of the chip: the community server.
+    g_discord_rect = RectF(g_win_w - kMargin - cw - 12.f - 30.f, 32.f, 30.f, 30.f);
+    const RectF dr = Scaled(g_discord_rect);
+    SolidBrush blurple(g_hover_discord ? Color(255, 112, 125, 255) : Color(255, 88, 101, 242));
+    g.FillEllipse(&blurple, dr);
+    // The mark: the face of the logo on a 24 x 24 grid, drawn in white with the two eyes cut out.
+    const float u = dr.Width * 0.62f / 24.f, ox = dr.X + dr.Width * 0.19f, oy = dr.Y + dr.Height * 0.21f;
+    const auto P = [&](float px, float py) { return PointF(ox + px * u, oy + py * u); };
+    GraphicsPath mark;
+    mark.StartFigure();
+    mark.AddBezier(P(4.5f, 4.2f), P(7.0f, 2.9f), P(9.5f, 2.4f), P(12.0f, 2.4f));
+    mark.AddBezier(P(12.0f, 2.4f), P(14.5f, 2.4f), P(17.0f, 2.9f), P(19.5f, 4.2f));
+    mark.AddBezier(P(19.5f, 4.2f), P(21.4f, 7.2f), P(22.5f, 11.0f), P(22.2f, 16.0f));
+    mark.AddBezier(P(22.2f, 16.0f), P(20.5f, 17.5f), P(18.7f, 18.4f), P(16.8f, 19.0f));
+    mark.AddLine(P(16.8f, 19.0f), P(15.8f, 17.2f));
+    mark.AddBezier(P(15.8f, 17.2f), P(16.6f, 16.9f), P(17.3f, 16.6f), P(18.0f, 16.1f));
+    mark.AddBezier(P(18.0f, 16.1f), P(15.0f, 17.5f), P(9.0f, 17.5f), P(6.0f, 16.1f));
+    mark.AddBezier(P(6.0f, 16.1f), P(6.7f, 16.6f), P(7.4f, 16.9f), P(8.2f, 17.2f));
+    mark.AddLine(P(8.2f, 17.2f), P(7.2f, 19.0f));
+    mark.AddBezier(P(7.2f, 19.0f), P(5.3f, 18.4f), P(3.5f, 17.5f), P(1.8f, 16.0f));
+    mark.AddBezier(P(1.8f, 16.0f), P(1.5f, 11.0f), P(2.6f, 7.2f), P(4.5f, 4.2f));
+    mark.CloseFigure();
+    SolidBrush white(Color(255, 255, 255, 255));
+    g.FillPath(&white, &mark);
+    g.FillEllipse(&blurple, ox + 5.9f * u, oy + 8.4f * u, 4.4f * u, 4.8f * u);
+    g.FillEllipse(&blurple, ox + 13.7f * u, oy + 8.4f * u, 4.4f * u, 4.8f * u);
   }
 
   // tabs: one page of cards at a time
@@ -1810,6 +2201,9 @@ void Paint(HDC hdc, int w, int h) {
   } else if (g_hover_browse >= 0) {
     msg = g_folder[g_hover_browse].hint;
     mc = kMuted;
+  } else if (g_hover_discord) {
+    msg = L"Join the DriveClub Recomp community on Discord.";
+    mc = kMuted;
   } else if (g_hover_tab >= 0) {
     msg = g_hover_tab < kTabCount ? kTabHint[g_hover_tab] : kSubHint[g_hover_tab - kTabCount];
     mc = kMuted;
@@ -1886,11 +2280,20 @@ std::wstring PatchXmlPath() {
 }
 
 std::wstring GameExe() {
+  wchar_t diagnostic[64] = {};
+  const DWORD length = GetEnvironmentVariableW(L"BB_DIAGNOSTIC_RUNTIME", diagnostic, 64);
+  if (length > 0 && length < 64 &&
+      std::wstring(diagnostic) == L"DriveClubGame.diagnostics.exe")
+    return g_runtime + L"\\DriveClubGame.diagnostics.exe";
   const std::wstring bundled = g_runtime + L"\\DriveClubGame.exe";
   return Exists(bundled) ? bundled : g_home + L"\\..\\DriveClubGame.exe";
 }
 
+DWORD g_started_game_process_id = 0;
+std::wstring g_external_progress;
+void WriteExternalProgress(int percent, const std::wstring& text);
 void SetProgress(int percent, const std::wstring& text) {
+  WriteExternalProgress(percent, text);
   g_progress = percent;
   g_progress_text = text;
   if (g_hwnd) PostMessageW(g_hwnd, WM_APP + 1, 0, 0);
@@ -2107,14 +2510,6 @@ std::wstring Preflight() {
 
 std::wstring g_game_log;  // the log file of the game started last
 
-// Set on every start, including on -> off in the same launcher process.
-void SetCameraPatchEnvironment() {
-  bool on = false;
-  for (const Ctl& c : g_c)
-    if (c.patches[0] == "@camera_patch") on = c.sel != 0;
-  SetEnvironmentVariableW(L"BB_CAMERA_PATCH", on ? L"1" : L"0");
-}
-
 // Starts the game. With `process` the caller gets the game's process handle (and closes it).
 std::wstring StartGame(HANDLE* process = nullptr) {
   const std::wstring exe = GameExe();
@@ -2183,8 +2578,8 @@ std::wstring StartGame(HANDLE* process = nullptr) {
                      L"\\content.bin\" --patches \"" + prep + L"\\patches.bin\" --app0 \"" + g_folder[0].path +
                      L"\" --app0-base \"" + g_folder[1].path + L"\" --user \"" + user + L"\" --mods \"" + g_home + L"\\mods\"" +
                      unlock_arg + graphics_arg + L" --stub-unresolved";
+  SetEnvironmentVariableW(L"BB_CAMERA_PATCH",g_c[g_camera_patch_row].sel ? L"1" : L"0");
   SetEnvironmentVariableW(L"BB_MOTION_BLUR_REFERENCE", MotionBlurReference());
-  SetCameraPatchEnvironment();
   SetEnvironmentVariableW(L"BB_GPU_USER_DIR", user.c_str());
   SetEnvironmentVariableW(L"BB_PREFLIGHT_NOTE", g_preflight_note.empty() ? nullptr : std::wstring(g_preflight_note.begin(), g_preflight_note.end()).c_str());
   SetEnvironmentVariableW(L"BB_CRASH_DIR", (g_home + L"\\logs").c_str());
@@ -2306,6 +2701,8 @@ std::wstring StartGame(HANDLE* process = nullptr) {
     LauncherLog("CreateProcess failed, error " + std::to_string(GetLastError()));
     return L"Could not start the game.";
   }
+  g_started_game_process_id = pi.dwProcessId;
+  WriteExternalProgress(100, L"Loading DRIVECLUB...");
   CloseHandle(pi.hThread);
   if (process) *process = pi.hProcess;
   else CloseHandle(pi.hProcess);
@@ -2387,7 +2784,7 @@ void Play() {
     g_status_color = kBad;
     return;
   }
-  SaveSettings();
+  if(!SaveSettings()) { g_status=g_settings_error;g_status_color=kBad;return; }
   g_busy = true;
   g_status.clear();
   std::thread(PlayWorker).detach();
@@ -2563,7 +2960,7 @@ void RunBenchmark() {
     g_status_color = kBad;
     return;
   }
-  SaveSettings();
+  if(!SaveSettings()) { g_status=g_settings_error;g_status_color=kBad;return; }
   g_busy = true;
   g_bench_running = true;
   g_status.clear();
@@ -2746,7 +3143,26 @@ void UpdateMotionBlurTooltip(HWND window) {
 
 LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
+    case WM_TIMER: {
+      if (w == kFfbCaptureTimer) {
+        PollFfbCapture(h);
+        return 0;
+      }
+      break;
+    }
     case WM_KEYDOWN: {
+      if (g_ffb_capture >= 0 && (w == VK_ESCAPE || w == VK_DELETE || w == VK_BACK)) {  // FFB gain + / - waits
+        if (w == VK_ESCAPE) {
+          StopFfbCapture(h);
+          g_status = L"Wheel button unchanged.";
+          g_status_color = kMuted;
+          g_status_sticky = true;
+        } else {
+          SetFfbGainButton(h, g_ffb_capture, -1);
+        }
+        InvalidateRect(h, nullptr, FALSE);
+        return 0;
+      }
       if (w == VK_ESCAPE && g_info_open >= 0) {
         g_info_open = -1;
         InvalidateRect(h, nullptr, FALSE);
@@ -2873,6 +3289,10 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         g_hover_tab = tab;
         InvalidateRect(h, nullptr, FALSE);
       }
+      if (const bool on_discord = HitDiscord(x, y); on_discord != g_hover_discord) {
+        g_hover_discord = on_discord;
+        InvalidateRect(h, nullptr, FALSE);
+      }
       UpdateMotionBlurTooltip(h);
       TRACKMOUSEEVENT t{sizeof(t), TME_LEAVE, h, 0};
       TrackMouseEvent(&t);
@@ -2881,12 +3301,47 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_MOUSELEAVE:
       g_hover_ctl = g_hover_seg = g_hover_btn = g_hover_browse = g_hover_tab = -1;
       g_hover_info = -1;
+      g_hover_discord = false;
       g_bench_ran_hover = false;
       InvalidateRect(h, nullptr, FALSE);
       return 0;
+    case WM_SETCURSOR:
+      if (g_hover_discord && LOWORD(l) == HTCLIENT) {
+        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        return TRUE;
+      }
+      break;
     case WM_LBUTTONDOWN: {
       const float x = float(GET_X_LPARAM(l)), y = float(GET_Y_LPARAM(l));
       if (g_busy) return 0;
+      if (HitDiscord(x, y)) {
+        // Where no browser can be opened the link goes to the clipboard. Under Wine and Proton ShellExecute reports success even
+        // when xdg-open is missing and nothing opens, so there the link is copied and shown every time.
+        const bool opened = reinterpret_cast<INT_PTR>(ShellExecuteW(h, L"open", kDiscordUrl, nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+        const bool wine = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
+        if (!opened || wine) {
+          bool copied = false;
+          if (OpenClipboard(h)) {
+            const size_t bytes = (wcslen(kDiscordUrl) + 1) * sizeof(wchar_t);
+            if (HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+              if (void* p = GlobalLock(mem)) {
+                memcpy(p, kDiscordUrl, bytes);
+                GlobalUnlock(mem);
+                EmptyClipboard();
+                copied = SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+              }
+              if (!copied) GlobalFree(mem);
+            }
+            CloseClipboard();
+          }
+          const wchar_t* lead = opened ? L"Discord opens in your browser. The link is also " : L"The browser could not be opened. The link is ";
+          g_status = std::wstring(lead) + (copied ? L"copied: " : L"here: ") + kDiscordUrl;
+          g_status_color = copied || opened ? kOk : kWarn;
+          g_status_sticky = true;
+          InvalidateRect(h, nullptr, FALSE);
+        }
+        return 0;
+      }
       CommitName();
       g_status_sticky = false;
       // the details panel: a click anywhere closes it; a click on an (i) opens it
@@ -2951,6 +3406,8 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (ctl.kind == Kind::Button) {
           const RectF ct = Scaled(ctl.ctl);
           if (c == g_wheel_setup && y >= ct.Y && y <= ct.Y + ct.Height) OpenWheelSetup();
+          for (int k = 0; k < 2; ++k)
+            if (c == g_ffb_gain_row[k] && y >= ct.Y && y <= ct.Y + ct.Height) StartFfbCapture(h, k);
           InvalidateRect(h, nullptr, FALSE);
           return 0;
         }
@@ -2975,6 +3432,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
           // choices that show or hide other rows (RowHidden)
           const bool model_changed = (c == g_ffb_model || c == g_aa || c == g_up || c == g_fps) && ctl.sel != seg;
           ctl.sel = seg;
+          if (c == g_fps && model_changed) ApplyFrameModeCameraDefault();
           if (c == g_preset) ApplyPreset(seg);
           else if (c == g_outres || c == g_inres || c == g_wide) {
             // A widescreen size sets the render and output size itself: other sizes there crop the picture.
@@ -2992,6 +3450,11 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
           }
           else if (c == g_ffb_preset) ApplyWheelPreset(seg);
           else if (c == g_drive_preset) ApplyDrivePreset(seg);
+          if (c == g_ffb_model && seg == 1) {
+            g_status = L"Original Physics is not recommended for wheels: it is the PS4 game's spring for 2014 Logitech wheels, without the tyres' grip. Reworked Physics gives the feel of a racing sim.";
+            g_status_color = kWarn;
+            g_status_sticky = true;
+          }
           if (IsDriveRow(ctl)) DeriveDrivePreset();
           if (c == g_aa) NameNativeUpscale();
           g_changed = true;
@@ -3013,9 +3476,9 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (b == 3) StartUpdate();
         else if (b == 0) ResetDefaults();
         else if (b == 1) {
-          SaveSettings();
-          g_status = L"Saved.";
-          g_status_color = kOk;
+          const bool saved=SaveSettings();
+          g_status=saved ? L"Saved." : g_settings_error;
+          g_status_color=saved ? kOk : kBad;
         } else if (b == 2) Play();
       }
       InvalidateRect(h, nullptr, FALSE);
@@ -3046,9 +3509,17 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 
+#include "launcher_wpf_bridge.inc"
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
+  {
+    int argc = 0; wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    const int deferred = argv ? Updater::RunDeferred(argc, argv) : -1;
+    if (argv) LocalFree(argv);
+    if (deferred >= 0) return deferred;
+  }
   if (wcsstr(GetCommandLineW(), L"--gpu-check")) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -3069,6 +3540,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   MakeDirs(g_data + L"\\user");
   LoadSettings();
   LoadBenchResult();
+  {
+    int argc=0; wchar_t** argv=CommandLineToArgvW(GetCommandLineW(), &argc);
+    const int result=RunWpfBridge(argc,argv); LocalFree(argv);
+    if(result>=0){CoUninitialize();return result;}
+  }
   StartLauncherLog();
   if (!g_skip_gpu_check) {
     g_gpu_problem = CheckCpu();
@@ -3090,7 +3566,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
       if (!g_skip_gpu_check) {
         if (const std::wstring gpu = CheckGpu(); !gpu.empty()) return gpu;
       }
-      SaveSettings();
+      if(!SaveSettings()) return g_settings_error;
       SetProgress(0, L"");
       std::wstring e = RunPrepare();
       return e.empty() ? StartGame() : e;

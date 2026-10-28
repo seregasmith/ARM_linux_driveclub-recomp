@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # Builds the game runtime. See BUILDING.md.
-#   Windows (MSYS2 CLANG64): out/DriveClubGame.exe
+#   Windows (MSYS2 CLANG64): out/DriveClubGame.exe (BB_DIAGNOSTICS=ON: out/DriveClubGame.diagnostics.exe)
 #   Linux x86-64 / aarch64:  out/DriveClubGame, out/gpu/libbbgpu.so, out/dc-launcher, out/dc-prepare,
-#                            out/dc-cpu-selftest
+#                            out/dc-cpu-selftest (BB_DIAGNOSTICS=ON: out/DriveClubGame.diagnostics and
+#                            out/gpu-diagnostics/libbbgpu.so instead of the first two)
 #                            (aarch64 also out/fex/libbbcpu.so: the game's x86-64 code runs in FEXCore's JIT)
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 mkdir -p out
+
+# BB_DIAGNOSTICS=ON: capture, profiling and trace support (the BB_FRAME_STATS, BB_GPU_PROFILE, ... variables;
+# gpu/shim/bbport_diagnostics.h; docs/runtime-diagnostics.md), as a separate runtime next to the normal one, in its
+# own CMake build folder: out/DriveClubGame.diagnostics(.exe) with out/gpu-diagnostics. On Linux run.sh starts it
+# with BB_DIAGNOSTIC_RUNTIME=DriveClubGame.diagnostics.
+case "${BB_DIAGNOSTICS:-OFF}" in
+    ON|on|1|TRUE|true) diagnostic=ON ;;
+    OFF|off|0|FALSE|false) diagnostic=OFF ;;
+    *) echo 'BB_DIAGNOSTICS must be ON or OFF.' >&2; exit 1 ;;
+esac
 
 case $(uname -s) in
 MINGW*|MSYS*|CYGWIN*)
@@ -17,16 +28,18 @@ MINGW*|MSYS*|CYGWIN*)
     done
     # Source paths in the binary (assert and log messages) are written relative to the repository.
     root="$(cygpath -m "$PWD")"
-    cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO=off \
-        -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+    if [[ $diagnostic == ON ]]; then build=out/gpu-diagnostics; output=out/DriveClubGame.diagnostics.exe
+    else build=out/gpu; output=out/DriveClubGame.exe; fi
+    cmake -S gpu -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO=off \
+        -DBB_DIAGNOSTICS="$diagnostic" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_FLAGS="-ffile-prefix-map=$root=." -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$root=." >/dev/null
-    if ! ninja -C out/gpu DriveClubGame > out/gpu-build.log 2>&1; then
-        grep -v '^\[' out/gpu-build.log | tail -40 >&2
-        echo 'Build failed (full log: out/gpu-build.log)' >&2
+    if ! ninja -C "$build" DriveClubGame > "$build-build.log" 2>&1; then
+        grep -v '^[[]' "$build-build.log" | tail -40 >&2
+        echo "Build failed (full log: $build-build.log)" >&2
         exit 1
     fi
-    cp out/gpu/DriveClubGame.exe out/
-    echo "Built $PWD/out/DriveClubGame.exe"
+    cp "$build/DriveClubGame.exe" "$output"
+    echo "Built $PWD/$output"
     exit 0
     ;;
 esac
@@ -51,7 +64,8 @@ read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3)"
 read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
 arch=$(uname -m)
 
-# GPU library (shadPS4 video core + drivers + network module), built by CMake into out/gpu/libbbgpu.so.
+# GPU library (shadPS4 video core + drivers + network module), built by CMake into out/gpu/libbbgpu.so
+# (diagnostics: out/gpu-diagnostics/libbbgpu.so).
 # BB_PGO: generate (instrumented build that writes pgo/ while the game runs), use, off (default: use when pgo/
 # holds a profile; GCC only). BB_LTO=OFF disables link-time optimization.
 pgo=${BB_PGO:-}
@@ -59,18 +73,25 @@ if [[ -z $pgo ]]; then
     if [[ -n $(find pgo -name '*.gcda' -print -quit 2>/dev/null) ]]; then pgo=use; else pgo=off; fi
 fi
 mkdir -p pgo
-cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
+if [[ $diagnostic == ON ]]; then gpu_dir=out/gpu-diagnostics; game_out=out/DriveClubGame.diagnostics
+else gpu_dir=out/gpu; game_out=out/DriveClubGame; fi
+cmake -S gpu -B "$gpu_dir" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" -DBB_DIAGNOSTICS="$diagnostic" \
     -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" \
     -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
     -DCMAKE_C_FLAGS="-ffile-prefix-map=$PWD=." -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$PWD=." >/dev/null
-echo "GPU library: $(basename "$CXX"), PGO $pgo, LTO ${BB_LTO:-ON}"
+echo "GPU library: $(basename "$CXX"), PGO $pgo, LTO ${BB_LTO:-ON}, diagnostics $diagnostic"
 # A failed GPU build must stop here: an older libbbgpu.so would otherwise be used silently.
-if ! ninja -C out/gpu bbgpu > out/gpu-build.log 2>&1; then
-    grep -v '^\[' out/gpu-build.log | tail -40 >&2
-    echo 'GPU library build failed (full log: out/gpu-build.log)' >&2; exit 1
+if ! ninja -C "$gpu_dir" bbgpu > "$gpu_dir-build.log" 2>&1; then
+    grep -v '^\[' "$gpu_dir-build.log" | tail -40 >&2
+    echo "GPU library build failed (full log: $gpu_dir-build.log)" >&2; exit 1
 fi
-# $ORIGIN/gpu: packaged copies keep the library next to the binary without patching it.
-gpu=(-Lout/gpu -lbbgpu -Wl,-rpath,'$ORIGIN/gpu' -Wl,-rpath,"$PWD/out/gpu" -rdynamic)
+# $ORIGIN/gpu: packaged copies keep the library next to the binary without patching it. The diagnostics runtime
+# loads only its own library (out/gpu would be found first through $ORIGIN/gpu).
+if [[ $diagnostic == ON ]]; then
+    gpu=(-L"$gpu_dir" -lbbgpu -Wl,-rpath,"$PWD/$gpu_dir" -rdynamic)
+else
+    gpu=(-Lout/gpu -lbbgpu -Wl,-rpath,'$ORIGIN/gpu' -Wl,-rpath,"$PWD/out/gpu" -rdynamic)
+fi
 
 # Hosts other than x86-64: the game's code runs in FEXCore's JIT, linked into out/fex/libbbcpu.so
 # (cpu/: FEX's CMake project builds it, cpu/fex_project.cmake adds the target). FEX needs Clang.
@@ -110,9 +131,10 @@ fi
 cflags=(-std=c11 -O2 -g -Wall -Wextra -Wno-format-truncation -Wno-unknown-pragmas -Wno-unknown-warning-option
         -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -pthread -fno-pie
         -ffile-prefix-map="$PWD"=.)
+[[ $diagnostic == ON ]] && cflags+=(-DBB_DIAGNOSTICS=1)
 "$CC" "${cflags[@]}" -no-pie "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c \
-    out/libatrac9.a -lm -ldl "${gpu[@]}" "${cpu[@]}" "${libraries[@]}" -o out/DriveClubGame
-echo "Built $PWD/out/DriveClubGame"
+    out/libatrac9.a -lm -ldl "${gpu[@]}" "${cpu[@]}" "${libraries[@]}" -o "$game_out"
+echo "Built $PWD/$game_out"
 
 # The guest CPU's self-test without the game (run.sh --cpu-selftest): FEXCore on ARM64, the host CPU on x86-64.
 selftest=(tools/cpu_selftest.c)

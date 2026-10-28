@@ -942,7 +942,7 @@ struct EnvLayer : Layer {
                     app.dirty = true;
                 }));
             } else {
-                app.Push(new KeyboardLayer("New variable: its name (for example BB_FRAME_STATS)", "", 64, true,
+                app.Push(new KeyboardLayer("New variable: its name (for example BB_BENCHMARK)", "", 64, true,
                                            [this](const std::string& name) {
                                                if (name.empty()) return;
                                                app.Push(new KeyboardLayer(name + " =", "", 200, false, [this, name](const std::string& v) {

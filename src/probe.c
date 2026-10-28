@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include "runtime.h"
+#include "../gpu/shim/bbport_diagnostics.h"
 #include "guest_cpu.h"
 #include "gpu/bbgpu.h"
 #if !defined(__GNUC__) || (!defined(__x86_64__) && defined(_WIN32))
@@ -714,7 +715,7 @@ static void patch_shared_alloc(unsigned char *image, uint64_t size) {
     static const uint64_t alloc = 0x753a80, video_alloc = 0x753b40;
     static const uint64_t sites[7] = {0x744379, 0x744c8c, 0x75848e, 0x7584c4, 0x100acff, 0x100ad1c, 0x7584e1};
     const char *pad = getenv("BB_SHARED_PAD");
-    const int log = getenv("BB_SHARED_LOG") != NULL, padding = pad ? (int)strtoul(pad, NULL, 0) : 3;
+    const int log = BB_DIAGNOSTIC_ENV("BB_SHARED_LOG") != NULL, padding = pad ? (int)strtoul(pad, NULL, 0) : 3;
     if ((!log && !padding) || size < 0x100ad1c + 5) return;
     uintptr_t wrapper = host_entry(bbgpu_shared_alloc_hook((uintptr_t)image + alloc, (uintptr_t)image));
     if (!wrapper) return;
@@ -1338,7 +1339,7 @@ int main(int argc, char **argv) {
     _set_invalid_parameter_handler(on_invalid_parameter);
     _set_purecall_handler(on_pure_call);
     SetConsoleCtrlHandler(console_closing,TRUE);
-    if (getenv("BB_STRICT_HANDLES")) {
+    if (BB_DIAGNOSTIC_ENV("BB_STRICT_HANDLES")) {
         PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strict={0};
         strict.RaiseExceptionOnInvalidHandleReference=1;
         strict.HandleExceptionsPermanentlyEnabled=1;
@@ -1571,6 +1572,8 @@ int main(int argc, char **argv) {
         }
     }
     printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
+    extern void runtime_exit_initialize(void);
+    runtime_exit_initialize();
     entered_game=1;
     /* Static: the host stack may lie above 47-bit guest addresses (arm64 hosts). */
     static struct { uint64_t argc; const char *argv[3]; } params = {1, {"/app0/eboot.bin", NULL, NULL}};

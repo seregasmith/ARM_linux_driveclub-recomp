@@ -281,6 +281,13 @@ if [[ $mode == launcher ]]; then
     export DC_DATA_DIR=$data
     exec "$bin/dc-launcher" --run-sh "$here/run.sh" --data "$data" --patches-xml "$patch_xml" --bin "$bin"
 fi
+# The diagnostics runtime (BB_DIAGNOSTICS=ON bash build.sh; docs/runtime-diagnostics.md) next to the normal one:
+# BB_DIAGNOSTIC_RUNTIME=DriveClubGame.diagnostics (or env.BB_DIAGNOSTIC_RUNTIME in the settings) starts it instead.
+diagnostic_runtime=${BB_DIAGNOSTIC_RUNTIME:-${cfg_env[BB_DIAGNOSTIC_RUNTIME]:-}}
+if [[ $diagnostic_runtime == DriveClubGame.diagnostics ]]; then
+    if [[ -x $bin/DriveClubGame.diagnostics ]]; then game=$bin/DriveClubGame.diagnostics
+    else echo "DriveClub: no $bin/DriveClubGame.diagnostics (BB_DIAGNOSTICS=ON bash build.sh): the normal runtime starts" >&2; fi
+fi
 [[ -x $game && -x $prepare ]] || die "the runtime is not built ($game). Run: bash build.sh"
 # The game's memory model and FEXCore (ARM64) assume 4 KB pages (some ARM64 kernels use 16 KB).
 page=$(getconf PAGESIZE 2>/dev/null || echo 4096)

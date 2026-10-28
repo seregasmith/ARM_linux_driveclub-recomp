@@ -5,6 +5,7 @@
  * LibAtrac9 (MIT, third_party/LibAtrac9). MP3/AAC instances stop explicitly. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "../gpu/shim/bbport_diagnostics.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,7 +78,7 @@ static size_t jobs_run, frames_decoded, batches_run;
 /* BB_AUDIO_TRACE=1: instance configurations and jobs that return a non-zero result. */
 static int trace_left=-1;
 static int ajm_trace(void) {
-    if (trace_left<0) { const char *e=getenv("BB_AUDIO_TRACE"); trace_left=e && e[0]=='1' ? 400 : 0; }
+    if (trace_left<0) { const char *e=BB_DIAGNOSTIC_ENV("BB_AUDIO_TRACE"); trace_left=e && e[0]=='1' ? 400 : 0; }
     return trace_left>0 && trace_left--;
 }
 static uint32_t ident(uint32_t word) { return word & 0x3f; }

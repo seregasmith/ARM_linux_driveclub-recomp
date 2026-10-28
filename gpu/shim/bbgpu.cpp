@@ -1,3 +1,4 @@
+#include "bbport_diagnostics.h"
 #include "bbport_recent.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "bbport_write_log.h"
@@ -33,6 +34,8 @@
 #include "core/signals.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
 
 extern "C" {
@@ -55,11 +58,19 @@ void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, Ru
 }
 
 Frontend::WindowSDL* g_window = nullptr;
+static std::atomic<bool> g_gpu_shutdown_complete{false};
 
 namespace Libraries::GnmDriver { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
 namespace Libraries::AvPlayer { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
-namespace Libraries::VideoOut { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
+namespace Libraries::VideoOut {
+void RegisterLib(Core::Loader::SymbolsResolver* sym);
+void StopPresenting();
+void Shutdown();
+}
+extern std::unique_ptr<Vulkan::Presenter> presenter;
+extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
 namespace Libraries::Kernel { void RegisterEventQueue(Core::Loader::SymbolsResolver* sym); }
+namespace Libraries::Kernel { void StopKernelService(); }
 
 namespace {
 struct Symbol {
@@ -92,6 +103,11 @@ public:
 };
 
 void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
+    if (!rasterizer_) {
+        runtime_memory_set_gpu_hooks(nullptr,nullptr,nullptr);
+        rasterizer=nullptr;
+        return;
+    }
     BbStartSampler();
     rasterizer = rasterizer_;
     // Existing guest mappings are replayed by the runtime when hooks are installed.
@@ -156,11 +172,11 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
 void AddressSpace::Protect(VAddr virtual_addr, u64 size, MemoryPermission perms) {
     BbStats::Timer timer{BbStats::t_protect};
     const u64 pages = (size + 4095) / 4096;
-    BbStats::protect_calls.fetch_add(1, std::memory_order_relaxed);
-    BbStats::protect_pages.fetch_add(pages, std::memory_order_relaxed);
+    if constexpr (BB_DIAGNOSTICS) BbStats::protect_calls.fetch_add(1, std::memory_order_relaxed);
+    if constexpr (BB_DIAGNOSTICS) BbStats::protect_pages.fetch_add(pages, std::memory_order_relaxed);
     if (!True(perms & MemoryPermission::Write)) {
-        BbStats::protect_revoke_calls.fetch_add(1, std::memory_order_relaxed);
-        BbStats::protect_revoke_pages.fetch_add(pages, std::memory_order_relaxed);
+        if constexpr (BB_DIAGNOSTICS) BbStats::protect_revoke_calls.fetch_add(1, std::memory_order_relaxed);
+        if constexpr (BB_DIAGNOSTICS) BbStats::protect_revoke_pages.fetch_add(pages, std::memory_order_relaxed);
     }
     runtime_memory_gpu_protect(virtual_addr, size, True(perms & MemoryPermission::Read),
                                True(perms & MemoryPermission::Write));
@@ -197,6 +213,7 @@ std::thread g_window_thread;
 std::mutex g_window_mutex;
 std::condition_variable g_window_cv;
 bool g_window_ready;
+std::atomic<bool> g_window_shutdown{false};
 } // namespace
 
 u32 BbDisplayRefreshHz() {
@@ -272,15 +289,20 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
             g_window_ready = true;
         }
         g_window_cv.notify_all();
-        while (window->PollEvents()) {
+        while (!g_window_shutdown && window->PollEvents()) {
             SDL_Delay(2);
+        }
+        if (g_window_shutdown) {
+            delete window;
+            g_window=nullptr;
+            return;
         }
         LOG_INFO(Frontend, "Window closed by user");
         runtime_ffb_release("the window closed");
         std::fflush(stdout);
         std::_Exit(0);
     });
-    g_window_thread.detach();
+    std::atexit(bbgpu_shutdown);
     {
         std::unique_lock lock{g_window_mutex};
         g_window_cv.wait(lock, [] { return g_window_ready; });
@@ -290,6 +312,27 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     Libraries::GnmDriver::RegisterLib(&resolver);
     Libraries::VideoOut::RegisterLib(&resolver);
     return 0;
+}
+
+extern "C" void bbgpu_shutdown(void) {
+    static std::once_flag stopped;
+    std::call_once(stopped,[] {
+        std::puts("GPU: stopping presentation threads");
+        Libraries::VideoOut::StopPresenting();
+        // Liverpool references both the port and the presenter's rasterizer;
+        // join it before destroying either of those owners.
+        liverpool.reset();
+        Libraries::VideoOut::Shutdown();
+        presenter.reset();
+        Core::Memory::Instance()->SetRasterizer(nullptr);
+        Core::Signals::Instance()->RemoveHandlers();
+        Libraries::Kernel::StopKernelService();
+        g_window_shutdown=true;
+        if(g_window_thread.joinable()) g_window_thread.join();
+        runtime_ffb_release("the game exited");
+        g_gpu_shutdown_complete=true;
+        std::puts("GPU: shutdown complete");
+    });
 }
 
 namespace Libraries::Kernel { void StartKernelService(); }
@@ -317,6 +360,7 @@ extern "C" uintptr_t bbgpu_resolve(const char* scoped_nid) {
 }
 
 extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
+    if(g_gpu_shutdown_complete) return 0;
     return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
 }
 
@@ -411,6 +455,14 @@ static void KernelServiceThread(std::stop_token stoken) {
 void StartKernelService() {
     service_thread = std::jthread{KernelServiceThread};
 }
+void StopKernelService() {
+    if(service_thread.joinable()) {
+        service_thread.request_stop();
+        io_context.stop();
+        cv_asio_req.notify_all();
+        service_thread.join();
+    }
+}
 
 int* PS4_SYSV_ABI __Error() {
     return runtime_errno();
@@ -434,6 +486,8 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
+extern "C" int bbgpu_exit_dialog_available(void) { return BbOverlay::ExitDialogAvailable(); }
+extern "C" void bbgpu_mouse_stick_capture(int capture) { BbOverlay::RequestMouseCapture(capture!=0); }
 
 extern "C" void bbgpu_overlay_note(const char* text_utf8) {
     BbOverlay::Note(text_utf8 ? text_utf8 : "");

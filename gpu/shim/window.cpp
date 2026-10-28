@@ -81,6 +81,7 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    BbOverlay::UpdateMouseCapture(window);
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread

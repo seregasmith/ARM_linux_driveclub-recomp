@@ -263,8 +263,14 @@ CPU, but push events that pass pointers to host stack data are untested.
 
 FEXCore reads its options from `FEX_*` variables; set them with `env.` lines in `driveclub.conf`, e.g.
 `env.FEX_TSOENABLED=0` (no x86 memory-ordering emulation: faster, but the game's threads may then see each other's
-writes out of order and crash) or `env.FEX_MULTIBLOCK=1` (the default). `env.BB_FRAME_STATS=1` writes the frame
-statistics to the log every 5 seconds.
+writes out of order and crash) or `env.FEX_MULTIBLOCK=1` (the default).
+
+Frame statistics, GPU profiling, captures and trace logs (`BB_FRAME_STATS`, `BB_GPU_PROFILE`, ...) are only in the
+diagnostics runtime ([runtime-diagnostics.md](runtime-diagnostics.md)): `BB_DIAGNOSTICS=ON bash build.sh` builds
+`out/DriveClubGame.diagnostics` (with `out/gpu-diagnostics/`) next to the normal runtime, and
+`env.BB_DIAGNOSTIC_RUNTIME=DriveClubGame.diagnostics` starts it; then `env.BB_FRAME_STATS=1` writes the frame
+statistics to the log every 5 seconds. The AppImage has only the normal runtime. The benchmark (`env.BB_BENCHMARK=1`)
+works in both.
 
 **Low detail (Detail tab).** Below the game's own values, for a slow GPU or CPU. The other levels set fixed values;
 Low changes the game's own values in `viewportquality.xml` relative to what your archive has, and only where it has
