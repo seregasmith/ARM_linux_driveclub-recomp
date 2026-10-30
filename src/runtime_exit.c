@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "runtime_exit.h"
+#include "guest_cpu.h"
 #include "exit_dialog.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -36,6 +37,10 @@ static bool copy_guest(uintptr_t p, void *out, size_t n) {
 #endif
 }
 static uintptr_t ptr(uintptr_t p) { uintptr_t v=0; copy_guest(p,&v,sizeof(v)); return v; }
+/* The game's functions are guest code: called through the guest CPU (directly on x86-64, FEXCore on ARM64). */
+static uint64_t game_call(uintptr_t offset, uint64_t argument) {
+    return guest_cpu_call(runtime_image_base+offset,1,&argument);
+}
 static bool text(uintptr_t p, char *out, size_t n) {
     for (size_t i=0;i<n;++i) {
         if (!copy_guest(p+i,out+i,1)) { out[0]=0; return false; }
@@ -98,8 +103,7 @@ static bool snapshot(MenuSnapshot *m) {
     }
     uintptr_t gs=ptr(runtime_image_base+0x17788c0);
     if (gs) {
-        typedef uintptr_t (ABI *Current)(uintptr_t);
-        uintptr_t state=((Current)(runtime_image_base+0x4f24a0))(gs+8);
+        uintptr_t state=(uintptr_t)game_call(0x4f24a0,gs+8);
         text(ptr(state+8),m->state,sizeof(m->state));
     }
     return ptr(runtime_image_base+0x189f8c8)==m->selector;
@@ -119,10 +123,9 @@ static bool shutdown_retry_ready;
  * Preserve cleanup/initialization verbatim during play. When its owner asks
  * it to stop, leave the retry loop so its original outer loop can exit. */
 static ABI bool webapi_retry(unsigned char *manager) {
-    typedef bool (ABI *NetworkOperation)(void *);
-    ((NetworkOperation)(runtime_image_base+0x7d7420))(manager);
+    game_call(0x7d7420,(uintptr_t)manager);
     if (*(volatile unsigned char *)(manager+0x21)) return true;
-    return ((NetworkOperation)(runtime_image_base+0x7d6810))(manager);
+    return (game_call(0x7d6810,(uintptr_t)manager)&0xff)!=0;   /* a bool: AL */
 }
 void runtime_exit_initialize(void) {
     if (!runtime_image_base || runtime_image_size<0x189f8d0) return;
@@ -140,9 +143,10 @@ void runtime_exit_initialize(void) {
     void *start=(void *)((uintptr_t)site&~(uintptr_t)(page-1));
     if (mprotect(start,page,PROT_READ|PROT_WRITE|PROT_EXEC)) return;
 #endif
-    /* mov rdi,r15; movabs rax,webapi_retry; call rax; nop */
+    /* mov rdi,r15; movabs rax,webapi_retry; call rax; nop. The guest-callable address of the host function: on
+     * ARM64 the guest cannot run host code, FEXCore enters it through a thunk. */
     unsigned char patch[16]={0x4c,0x89,0xff,0x48,0xb8};
-    uintptr_t target=(uintptr_t)webapi_retry;
+    uintptr_t target=guest_cpu_host_function((void *)webapi_retry);
     memcpy(patch+5,&target,8); patch[13]=0xff; patch[14]=0xd0; patch[15]=0x90;
     memcpy(site,patch,sizeof(patch));
 #ifdef _WIN32
@@ -152,6 +156,7 @@ void runtime_exit_initialize(void) {
     mprotect(start,page,PROT_READ|PROT_EXEC);
     __builtin___clear_cache((char *)site,(char *)site+sizeof(patch));
 #endif
+    guest_cpu_code_changed((uintptr_t)site,sizeof(patch));
     shutdown_retry_ready=true;
     puts("Exit dialog: WebAPI offline retry now observes the game's stop request");
 }
@@ -190,8 +195,7 @@ void runtime_exit_tick(void) {
      * Never use SDL_QUIT/_Exit here. */
     if (quit) {
         puts("Exit dialog: requesting GameState.Quit (save transactions complete)");
-        typedef int (ABI *Quit)(void *);
-        ((Quit)(runtime_image_base+0x1404d0))(NULL);
+        game_call(0x1404d0,0);
     }
     pthread_mutex_unlock(&tick_lock);
 }
