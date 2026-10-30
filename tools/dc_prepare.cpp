@@ -4,14 +4,15 @@
 // (<work>/user/patches_enabled.txt): the patches that are on by default in the XML, plus --enable, minus --disable.
 //
 //   dc-prepare --update DIR --base DIR --work DIR --patches-xml FILE [--enable NAME]... [--disable NAME]...
-//              [--unlock] [--car-switch] [--detail KEY=VALUE]... [--force]
+//              [--unlock] [--unlock-all] [--car-switch] [--detail KEY=VALUE]... [--force]
 //   dc-prepare --patches-xml FILE --list
 //
 // The image is converted again only when the folders differ from the last run (<work>/prep/stamp.txt) or --force
 // is given; otherwise only patches.bin is rebuilt (a second or so). Exit code 0 on success, 1 with a message.
 //
 // Replacement game files built from the dumps, as the Windows launcher builds them (launcher/unlock.cpp,
-// carswitch.cpp, graphics.cpp): --unlock (the add-on content, <work>/unlock), --car-switch (faster car select,
+// carswitch.cpp, graphics.cpp): --unlock (the add-on content, <work>/unlock; --unlock-all also frees every car and
+// bike of its driver and club level, and includes the add-on content), --car-switch (faster car select,
 // <work>/carswitch), --detail (graphics detail, <work>/graphics; KEY: own_car, reflections, dynamic_res, motion_blur,
 // lens_dust, heat_haze, fxaa = 0|1; opponents, particles = low|0|1; scenery, shadows = low|game|high|ultra; changes.txt
 // there lists what was changed). Each is rebuilt only
@@ -36,7 +37,7 @@ namespace {
 void Usage() {
     std::fprintf(stderr,
                  "usage: dc-prepare --update DIR --base DIR --work DIR --patches-xml FILE\n"
-                 "                  [--enable NAME]... [--disable NAME]... [--unlock] [--car-switch]\n"
+                 "                  [--enable NAME]... [--disable NAME]... [--unlock] [--unlock-all] [--car-switch]\n"
                  "                  [--detail KEY=VALUE]... [--force]\n"
                  "       dc-prepare --patches-xml FILE --list\n");
 }
@@ -52,7 +53,7 @@ std::string ReadText(const fs::path& path) {
 int main(int argc, char** argv) {
     fs::path update, base, work, xml;
     std::vector<std::string> enable, disable;
-    bool list = false, force = false, unlock = false, car_switch = false;
+    bool list = false, force = false, unlock = false, unlock_all = false, car_switch = false;
     GraphicsChoice detail;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -72,6 +73,7 @@ int main(int argc, char** argv) {
         else if (a == "--list") list = true;
         else if (a == "--force") force = true;
         else if (a == "--unlock") unlock = true;
+        else if (a == "--unlock-all") unlock_all = true;
         else if (a == "--car-switch") car_switch = true;
         else if (a == "--detail") {
             const std::string kv = value("--detail");
@@ -161,10 +163,11 @@ int main(int argc, char** argv) {
             mods.push_back(fs::absolute(dir));
         }
     };
-    if (unlock) {
-        std::printf("[6/6] Unlocking the add-on content\n");
+    if (unlock || unlock_all) {
+        std::printf(unlock_all ? "[6/6] Unlocking every car and bike\n" : "[6/6] Unlocking the add-on content\n");
         std::fflush(stdout);
-        built("add-on content", BuildUnlock(update, base, work / "unlock"), work / "unlock", true);
+        built(unlock_all ? "every car and bike" : "add-on content", BuildUnlock(update, base, work / "unlock", unlock_all),
+              work / "unlock", true);
     }
     if (car_switch) {
         std::printf("[6/6] Faster car switching\n");

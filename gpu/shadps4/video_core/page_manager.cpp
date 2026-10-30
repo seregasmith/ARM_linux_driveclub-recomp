@@ -38,6 +38,8 @@
 // The guest memory's backing view (src/runtime_memory.c): reads that do not fault on protected pages.
 extern "C" int runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
 
+extern "C" int runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
+
 #ifdef __linux__
 #include <thread>
 #include <fcntl.h>

@@ -160,6 +160,10 @@ public partial class MainWindow : Window
     }
     private void ShowStatusHint(string text)
     {
+        // The footer line is one or two lines high: a hint with bullets shows its first line here, the rest is in the
+        // hover tooltip.
+        var newline = text.IndexOf('\n');
+        if (newline > 0) text = text[..newline].Trim() + "  (hover for the full text)";
         Status.Text = text; Status.Foreground = Brush("#A0A0AA");
         Status.Cursor = Cursors.Arrow; Status.ToolTip = null;
     }

@@ -26,7 +26,7 @@ pkgs.mkShell ({
     ffmpeg-headless boost fmt magic-enum robin-map xxhash vulkan-memory-allocator glslang spirv-cross xbyak zydis
     spirv-headers miniz libx11 libxcb xorgproto wayland
     # Network module (gpu/bbnet): shadNet client, HTTPS, UPnP
-    protobuf nlohmann_json openssl zlib miniupnpc
+    protobuf nlohmann_json openssl zlib miniupnpc libpng
   ];
 } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isAarch64 {
   # Guest CPU library (cpu/: FEXCore) builds with Clang only (build.sh).

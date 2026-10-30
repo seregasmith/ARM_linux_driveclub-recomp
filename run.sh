@@ -40,6 +40,8 @@
 #   name=Player                    the player name
 #   language=                      the PS4 system language id (1 English, 2 French, 4 German, 8 Russian, ...)
 #   dlc_unlock=0                   1: the add-on cars, bikes, tours and liveries, built from your own dumps
+#   unlock_all=0                   1: every car and bike free from the start (no driver or club level), add-on content
+#                                  included
 #   fast_car_switch=0              1: shorter car select animations, built from your own dumps
 #   detail.KEY=VALUE               graphics detail (own_car, reflections: 0|1; opponents, particles: low|0|1;
 #                                  dynamic_res, motion_blur, lens_dust, heat_haze, fxaa: 1|0; scenery, shadows:
@@ -367,6 +369,7 @@ for p in "${on[@]}" "${extra_on[@]}"; do [[ -n $p ]] && prep_args+=(--enable "$p
 for p in "${off[@]}" "${extra_off[@]}"; do [[ -n $p ]] && prep_args+=(--disable "$p"); done
 # Replacement game files built from your own dumps (launcher/unlock.cpp, carswitch.cpp, graphics.cpp).
 [[ ${cfg[dlc_unlock]:-0} == 1 ]] && prep_args+=(--unlock)
+[[ ${cfg[unlock_all]:-0} == 1 ]] && prep_args+=(--unlock-all)
 [[ ${cfg[fast_car_switch]:-0} == 1 ]] && prep_args+=(--car-switch)
 for key in "${!cfg[@]}"; do
     [[ $key == detail.* ]] && prep_args+=(--detail "${key#detail.}=${cfg[$key]}")

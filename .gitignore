@@ -12,3 +12,4 @@ launcher/wpf/bin/
 launcher/wpf/obj/
 launcher/tests/**/bin/
 launcher/tests/**/obj/
+pgo/*.profraw

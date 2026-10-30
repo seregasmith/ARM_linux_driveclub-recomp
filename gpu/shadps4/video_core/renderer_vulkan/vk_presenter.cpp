@@ -662,13 +662,14 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
     // bbport: TV gamma: the game was made for TVs that decode with 2.4, PC displays decode sRGB
-    // (about 2.2) and showed it washed out. The encoded values to the power 2.4 / 2.2 look on a PC
-    // display as the picture did on a TV. SDR only (HDR maps the picture itself). BB_TV_GAMMA=0: off.
-    static const bool tv_gamma = [] {
-        const char* env = std::getenv("BB_TV_GAMMA");
-        return !env || env[0] != '0';
-    }();
-    pp_settings.power = tv_gamma && !hdr_output ? 2.4f / 2.2f : 1.0f;
+    // (about 2.2) and showed it washed out. The encoded values to the power gamma / 2.2 look on a PC
+    // display as the picture did on a display of that gamma (2.4 by default, 2.2 as encoded).
+    // Then contrast around mid grey and brightness, all from picture.ini or F4 while playing.
+    // SDR only (HDR maps the picture itself).
+    const auto& picture = BbSettings::Get();
+    pp_settings.power = hdr_output ? 1.0f : float(picture.picture_gamma.load()) / 220.0f;
+    pp_settings.contrast = hdr_output ? 1.0f : float(picture.picture_contrast.load()) / 100.0f;
+    pp_settings.brightness = hdr_output ? 0.0f : float(picture.picture_brightness.load()) / 400.0f;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
 
     // Neural rendering on the finished, display-referred frame (the UI is in it), before the HDR conversion.

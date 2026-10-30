@@ -30,7 +30,8 @@ MINGW*|MSYS*|CYGWIN*)
     root="$(cygpath -m "$PWD")"
     if [[ $diagnostic == ON ]]; then build=out/gpu-diagnostics; output=out/DriveClubGame.diagnostics.exe
     else build=out/gpu; output=out/DriveClubGame.exe; fi
-    cmake -S gpu -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO=off \
+    # BB_PGO=use with BB_LTO=ON builds with the recorded profile (pgo/default.profdata); the default build is the fast one.
+    cmake -S gpu -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="${BB_PGO:-off}" \
         -DBB_DIAGNOSTICS="$diagnostic" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_FLAGS="-ffile-prefix-map=$root=." -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$root=." >/dev/null
     if ! ninja -C "$build" DriveClubGame > "$build-build.log" 2>&1; then

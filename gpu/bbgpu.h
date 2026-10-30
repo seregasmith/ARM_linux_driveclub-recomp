@@ -41,6 +41,8 @@ int bbgpu_exit_dialog_available(void);
 void bbgpu_mouse_stick_capture(int capture);
 /* A short line at the top of the screen for a few seconds (a hotkey's new value). */
 void bbgpu_overlay_note(const char *text_utf8);
+/* A trophy banner (grade 0 platinum, 1 gold, 2 silver, 3 bronze) with its name and description. */
+void bbgpu_overlay_trophy(int id, int grade, const char *title_utf8, const char *description_utf8);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 /* Frames presented so far (a freeze watchdog reads it). */

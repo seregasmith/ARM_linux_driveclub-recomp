@@ -157,6 +157,7 @@ grep -q '^language=' "$f" && sed -i 's/^language=.*/language=8/' "$f" || echo 'l
 | `name` | `Player` | the player name |
 | `language` | `1` | the console language (below) |
 | `dlc_unlock` | `0` | `1`: the add-on cars, bikes, tours and livery decals, built from your own dumps |
+| `unlock_all` | `0` | `1`: every car and bike free from the start (no driver or club level), add-on content included |
 | `fast_car_switch` | `0` | `1`: shorter car select animations, built from your own dumps |
 | `detail.KEY` | the game's | graphics detail (an edited copy of `global.rpk`): `own_car`, `reflections` `0`/`1`; `opponents`, `particles` `low`/`0`/`1`; `dynamic_res`, `motion_blur`, `lens_dust`, `heat_haze`, `fxaa` `1`/`0`; `scenery`, `shadows` `low`/`game`/`high`/`ultra` (Low: below) |
 | `gearbox` | `game` | `game` (the game's Options menu), `automatic`, `manual` |
@@ -253,8 +254,10 @@ measures its speed. On an Apple M-series Linux VM it reports about 2.8 billion i
 
 These use Windows APIs and stay Windows-only for now: the high-FPS camera/replay workaround (`BB_CAMERA_PATCH`),
 the field-of-view slider and F5/F6, the menu key-repeat timing fix, the scene overlay's time-of-day telemetry, the
-motion-blur exposure clock, the physics force-feedback model's car hook, wheel setup, DLSS, frame generation, HDR
-and the update checker. The game runs without them, as it does on Windows when they are off.
+motion-blur exposure clock, the physics force-feedback model's car hook, wheel setup, DLSS, frame generation, HDR,
+the update checker, and from v0.4.0 lock to horizon / camera shake and the replay seek timing fix (their code hooks
+call native functions from the game's own code, which on ARM64 would have to go through FEXCore). The game runs
+without them, as it does on Windows when they are off.
 
 Online play does not work on any platform; on ARM64 the network module's callbacks are routed through the guest
 CPU, but push events that pass pointers to host stack data are untested.

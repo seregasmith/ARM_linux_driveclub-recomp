@@ -91,6 +91,11 @@ struct Values {
     std::atomic<bool> hdr_output{false};
     std::atomic<float> hdr_paper{350.0f};
     std::atomic<float> hdr_peak{1000.0f};
+    /// The SDR picture (picture.ini, F4 in the game): brightness -50..50 (0 as made), contrast 50..150 %, and the
+    /// display gamma it is made for in hundredths, 180..280 (240 the TVs the game was made for, 220 a PC monitor).
+    std::atomic<int> picture_brightness{0};
+    std::atomic<int> picture_contrast{100};
+    std::atomic<int> picture_gamma{240};
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};
@@ -189,5 +194,7 @@ const char* AaScaleName(int scale);
 /// HDR brightness changed while playing (Page Up / Page Down): hdr.ini next to the settings file
 /// (the launcher shows it on its slider; read at start when BB_HDR_PAPER is not set).
 void SaveHdrBrightness(int nits);
+/// The picture changed while playing (F4): picture.ini next to the settings file, which the launcher's sliders show.
+void SavePicture();
 float AaScaleFactor(int scale);
 } // namespace BbSettings

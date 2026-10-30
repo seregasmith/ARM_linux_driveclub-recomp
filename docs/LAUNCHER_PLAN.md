@@ -164,6 +164,7 @@ All at the game's defaults: no file is built and nothing is served.
 | Language | the game's 21 languages (list) | env `BB_LANGUAGE` |
 | Player name | text (on-screen keyboard) | env `BB_USER_NAME` |
 | Unlock DLC content | on, off | mods (ported `launcher/unlock.cpp`, `datx.cpp`) |
+| Unlock every car and bike | on, off (v0.4.0; includes the add-on content) | mods (`dc-prepare --unlock-all`) |
 | Faster car switching | off (default), on | mods (ported `launcher/carswitch.cpp`; always on in the Windows launcher, off here so the default stays as the game runs today) |
 | Show FPS counter | on, off | file `user/driveclub.ini` |
 | MangoHud overlay | on, off | env `MANGOHUD` |
@@ -228,7 +229,7 @@ non-Steam program cannot open it reliably.
 |---|---|
 | `output` | `720p`, `768p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `5k`, `8k` |
 | `render` | `720p`, `768p`, `900p`, `default`, `1440p`, `1800p`, `4k`, `8k` |
-| `dlc_unlock` | `0`, `1` |
+| `dlc_unlock`, `unlock_all` | `0`, `1` |
 | `fast_car_switch` | `0`, `1` |
 | `detail.own_car`, `detail.reflections` | `0`, `1` |
 | `detail.opponents`, `detail.particles` | `low`, `0`, `1` |
@@ -263,6 +264,7 @@ a fresh install, a reset row and "Reset all settings" all give exactly today's g
 | Language | English (US) | `BB_LANGUAGE` unset: the runtime's 1 |
 | Player name | Player | |
 | Unlock DLC content | off | |
+| Unlock every car and bike | off | |
 | Faster car switching | off | |
 | Show FPS counter, MangoHud | off, off | |
 | Curated patches | all off | |

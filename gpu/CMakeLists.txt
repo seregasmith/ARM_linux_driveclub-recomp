@@ -33,10 +33,14 @@ if (BB_PGO STREQUAL "generate")
     add_compile_options(-fprofile-generate=${BB_PGO_DIR} -fprofile-update=atomic)
     add_link_options(-fprofile-generate=${BB_PGO_DIR})
     add_compile_definitions(BB_PGO_GENERATE)
-elseif (BB_PGO STREQUAL "use")
-    # Partial training keeps unprofiled code optimized normally; counters from concurrent
-    # threads can be slightly inconsistent (correction). Functions changed since the profile
+elseif (BB_PGO STREQUAL "use" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Clang: code without recorded counts is optimized normally, and functions changed since the profile
     # (or built differently for it, bbgpu_init) are compiled without it.
+    add_compile_options(-fprofile-use=${BB_PGO_DIR} -Wno-profile-instr-missing
+                        -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled)
+elseif (BB_PGO STREQUAL "use")
+    # GCC (Linux, .gcda files): partial training keeps unprofiled code optimized normally; counters from
+    # concurrent threads can be slightly inconsistent (correction).
     add_compile_options(-fprofile-use=${BB_PGO_DIR} -fprofile-partial-training
                         -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch)
 endif()
@@ -201,6 +205,10 @@ find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 target_compile_definitions(bbnet PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
 target_link_libraries(bbnet PRIVATE OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+# libScePngDec (bbnet/png_dec.cpp): the game decodes downloaded pictures (avatars) with it.
+find_package(PNG REQUIRED)
+target_sources(bbnet PRIVATE bbnet/png_dec.cpp)
+target_link_libraries(bbnet PRIVATE PNG::PNG)
 if (WIN32)
     target_sources(bbnet PRIVATE third_party/wepoll/wepoll.c)
     target_include_directories(bbnet PRIVATE third_party/wepoll)

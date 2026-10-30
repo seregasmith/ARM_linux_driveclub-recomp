@@ -256,6 +256,11 @@ void Model::Build(const std::vector<PatchInfo>& patches, int display_hz) {
            "Makes the add-on cars, bikes, tours and livery decals playable. Built from your own game files; the game "
            "folders are not changed. Cars you earn by playing still unlock as you progress.",
            false);
+    toggle(kTabGame, "Content", "unlock_all", "Unlock every car and bike",
+           "Every car and bike is free from the start, with no driver or club level needed. It includes the add-on "
+           "content, so Unlock DLC content is not needed with it. Cars you earn by winning an event stay as the game "
+           "has them.",
+           false);
     toggle(kTabGame, "Content", "fast_car_switch", "Faster car switching",
            "Shorter blur animations when you switch cars in the car select. Built from your own game files.", false);
     toggle(kTabGame, "On screen", "show_fps", "FPS counter", "The frame rate in a corner of the screen while playing.",
